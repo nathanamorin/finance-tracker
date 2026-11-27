@@ -8,7 +8,7 @@ RUN npm run build
 
 # Stage 2: build a static, CGO-free Go binary with the frontend embedded.
 # SQLite (with encryption) is pure Go via ncruces/go-sqlite3, so no C toolchain.
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
