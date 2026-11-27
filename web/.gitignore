@@ -1,0 +1,5 @@
+node_modules/
+# Built output is generated. dist/.keep is committed so `go:embed` works
+# before the frontend is built (`make web` recreates it after building).
+dist/*
+!dist/.keep

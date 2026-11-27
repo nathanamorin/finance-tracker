@@ -1,0 +1,5 @@
+# Local dev data (encrypted user databases + wrapped keys)
+.data/
+.env
+/finance-tracker
+.DS_Store
