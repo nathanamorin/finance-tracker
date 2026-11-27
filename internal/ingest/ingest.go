@@ -120,6 +120,9 @@ type Security struct {
 	Symbol string
 	Name   string
 	Type   SecurityType
+	// AssetClass is the source's own classification when it provides one
+	// (e.g. "Stocks--US Stocks" from a 401k plan); optional.
+	AssetClass string
 }
 
 // Transaction is one normalized ledger entry.
@@ -175,6 +178,46 @@ type Holding struct {
 	MarketValue       Cents
 }
 
+// BalanceSource says where a Balance came from. When two sources give a
+// balance for the same account and date, a holdings-derived balance wins
+// over a reported one, which wins over a derived one.
+type BalanceSource string
+
+const (
+	// BalanceReported is a balance the source states directly.
+	BalanceReported BalanceSource = "reported"
+	// BalanceDerived is computed from other figures in the file (e.g. a
+	// period's starting balance = ending balance − gains − other activity).
+	BalanceDerived BalanceSource = "derived"
+)
+
+// Balance is an account's total value on a date, for sources that report
+// balances rather than (or in addition to) positions. Balances from
+// Holdings are computed automatically and need not be listed here.
+type Balance struct {
+	AccountExternalID string
+	Date              Date
+	Amount            Cents
+	Source            BalanceSource
+}
+
+// PeriodPerformance is a per-fund summary over a date range, as reported by
+// sources (typically 401k/benefits sites) that summarize activity instead
+// of listing transactions. These are NOT turned into transactions: such
+// downloads usually cover overlapping ranges (e.g. year-to-date), so
+// summing them would double count.
+type PeriodPerformance struct {
+	AccountExternalID string
+	Security          Security
+	PeriodStart       Date
+	PeriodEnd         Date
+	StartingBalance   Cents // derived: ending − gain − other activity
+	EndingBalance     Cents
+	GainLoss          Cents // market gains/losses over the period
+	OtherActivity     Cents // net contributions, employer match, fees, transfers
+	ReturnPct         *float64
+}
+
 // Result is everything a parser extracted from one file.
 type Result struct {
 	Institution  string
@@ -183,6 +226,8 @@ type Result struct {
 	Holdings     []Holding
 	// HoldingsAsOf is the date the Holdings snapshot is valid for.
 	HoldingsAsOf Date
+	Balances     []Balance
+	Performance  []PeriodPerformance
 	// Warnings are non-fatal problems (skipped rows, unknown types, ...)
 	// surfaced to the user on the import record.
 	Warnings []string
@@ -192,6 +237,7 @@ type Result struct {
 type ParseOptions struct {
 	// AsOf is the date to stamp on position snapshots when the file
 	// itself does not say (Vanguard's positions section has no date).
+	// Sources whose files carry their own date use that instead.
 	AsOf Date
 }
 

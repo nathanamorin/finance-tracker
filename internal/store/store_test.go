@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nathanamorin/finance-tracker/internal/ingest"
+	"github.com/nathanamorin/finance-tracker/internal/ingest/benefitscenter"
 	"github.com/nathanamorin/finance-tracker/internal/ingest/vanguard"
 	"github.com/nathanamorin/finance-tracker/internal/keystore"
 )
@@ -228,5 +229,113 @@ func TestPeriodEnds(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("got %v, want %v", got, want)
 		}
+	}
+}
+
+// benefitsFixture is an anonymised real Benefits Center 401(k) fund summary.
+// It is FAKE DATA; see internal/ingest/benefitscenter/testdata/README.md.
+const benefitsFixture = "../ingest/benefitscenter/testdata/benefits_center_anonymised_export.csv"
+
+func importBenefits(t *testing.T, s *Store) *Import {
+	t.Helper()
+	content, err := os.ReadFile(benefitsFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := benefitscenter.CSV{}.Parse(bytes.NewReader(content), ingest.ParseOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	im, err := s.SaveImport(context.Background(), benefitscenter.CSV{}.ID(), "401k.csv", content, res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return im
+}
+
+func TestBenefitsCenterImport(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t, t.TempDir(), randomKey(t))
+	s, release, _ := m.Acquire(ctx, "alice")
+	defer release()
+
+	im := importBenefits(t, s)
+	if im.HoldingsAsOf == nil || *im.HoldingsAsOf != "2026-11-25" || im.HoldingsParsed != 1 {
+		t.Fatalf("import: %+v", im)
+	}
+	importBenefits(t, s) // re-import is idempotent
+
+	accts, _ := s.ListAccounts(ctx)
+	if len(accts) != 1 || accts[0].AccountType != "401k" || accts[0].Name != "Employer 401(k) Plan - All Account" ||
+		accts[0].Balance != 117426.62 {
+		t.Fatalf("accounts: %+v", accts)
+	}
+	holdings, _ := s.LatestHoldings(ctx)
+	if len(holdings) != 1 || holdings[0].AssetClass == nil || *holdings[0].AssetClass != "Stocks--US Stocks" {
+		t.Fatalf("holdings: %+v", holdings)
+	}
+	perf, err := s.LatestPerformance(ctx)
+	if err != nil || len(perf) != 1 || perf[0].GainLoss != 6034.83 || perf[0].OtherActivity != 13426.39 ||
+		perf[0].StartingBalance != 97965.40 {
+		t.Fatalf("performance: %+v %v", perf, err)
+	}
+	sum, _ := s.Summary(ctx)
+	if len(sum.AllocationByClass) != 1 || sum.AllocationByClass[0].Key != "Stocks--US Stocks" {
+		t.Fatalf("allocation by class: %+v", sum.AllocationByClass)
+	}
+	// Fund summaries never become ledger entries.
+	if _, total, _ := s.ListTransactions(ctx, TransactionFilter{}); total != 0 {
+		t.Fatalf("transactions: %d", total)
+	}
+}
+
+func TestBenefitsCenterValueHistoryUsesBalances(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t, t.TempDir(), randomKey(t))
+	s, release, _ := m.Acquire(ctx, "alice")
+	defer release()
+	importBenefits(t, s)
+
+	vh, err := s.ValueHistory(ctx, "month", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := func(date string) float64 {
+		for _, p := range vh.Points {
+			if p.Date == date {
+				return p.Value
+			}
+		}
+		t.Fatalf("no point at %s in %+v", date, vh.Points)
+		return 0
+	}
+	// Starts at the derived period-start balance and carries it forward...
+	if vh.Points[0].Date != "2026-01-31" || at("2026-01-31") != 97965.40 || at("2026-10-31") != 97965.40 {
+		t.Fatalf("points: %+v", vh.Points)
+	}
+	// ...then picks up the snapshot balance from its date on.
+	if last := vh.Points[len(vh.Points)-1]; last.Value != 117426.62 {
+		t.Fatalf("last point %+v", last)
+	}
+
+	// Combined with a transaction-based account, values add up and the
+	// 401k contributes nothing before its first balance.
+	importFixture(t, s)
+	vh, _ = s.ValueHistory(ctx, "month", 0)
+	sum, _ := s.Summary(ctx)
+	if last := vh.Points[len(vh.Points)-1]; math.Abs(last.Value-sum.TotalValue) > 1 {
+		t.Fatalf("combined last %v vs total %v", last.Value, sum.TotalValue)
+	}
+	vanguardOnly := func(date string) float64 {
+		v, _ := s.ValueHistory(ctx, "month", 0)
+		for _, p := range v.Points {
+			if p.Date == date {
+				return p.Value
+			}
+		}
+		return -1
+	}
+	if v := vanguardOnly("2025-12-31"); v <= 0 || v > 190000 {
+		t.Fatalf("2025-12-31 should hold only the Vanguard reconstruction, got %v", v)
 	}
 }

@@ -18,6 +18,7 @@ export interface Summary {
   income_ttm: number;
   last_import_at: string | null;
   allocation_by_type: AllocationSlice[];
+  allocation_by_class: AllocationSlice[];
   allocation_by_security: AllocationSlice[];
   allocation_by_account: AllocationSlice[];
 }
@@ -63,10 +64,26 @@ export interface Holding {
   symbol: string | null;
   security_name: string;
   security_type: string;
+  asset_class: string | null;
   as_of_date: string;
   quantity: number;
   price: number | null;
   market_value: number;
+}
+
+export interface Performance {
+  account_id: number;
+  account_name: string;
+  security_id: number;
+  security_name: string;
+  asset_class: string | null;
+  period_start: string;
+  period_end: string;
+  starting_balance: number;
+  ending_balance: number;
+  gain_loss: number;
+  other_activity: number;
+  return_pct: number | null;
 }
 
 export interface Import {
@@ -140,6 +157,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
   holdings: () => request<Holding[]>("/api/holdings"),
+  performance: () => request<Performance[]>("/api/performance"),
   transactions: (f: { account_id?: number; type?: string; from?: string; to?: string; q?: string; limit?: number; offset?: number }) =>
     request<{ transactions: Transaction[]; total: number }>(`/api/transactions${qs(f)}`),
   imports: () => request<Import[]>("/api/imports"),

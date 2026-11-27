@@ -121,6 +121,12 @@ func (s *Store) SaveImport(ctx context.Context, sourceID, filename string, conte
 			return nil, err
 		}
 	}
+	if err := saveBalances(ctx, tx, ids, importID, res.Balances); err != nil {
+		return nil, err
+	}
+	if err := savePerformance(ctx, tx, ids, importID, res.Performance); err != nil {
+		return nil, err
+	}
 
 	wj, _ := json.Marshal(warnings)
 	if _, err := tx.ExecContext(ctx, `
@@ -188,6 +194,63 @@ func saveHoldings(ctx context.Context, tx *sql.Tx, ids *idCache, importID int64,
 	return nil
 }
 
+// balanceRank orders balance sources: when two give a balance for the same
+// account and date, the higher rank wins (positions beat a stated balance,
+// which beats one derived from other figures).
+const balanceRankSQL = `CASE %s WHEN 'holdings' THEN 3 WHEN 'reported' THEN 2 ELSE 1 END`
+
+func saveBalances(ctx context.Context, tx *sql.Tx, ids *idCache, importID int64, balances []ingest.Balance) error {
+	q := fmt.Sprintf(`
+		INSERT INTO account_balances (account_id, as_of_date, balance_cents, source, import_id)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT (account_id, as_of_date) DO UPDATE SET
+			balance_cents = excluded.balance_cents, source = excluded.source, import_id = excluded.import_id
+		WHERE %s >= %s`, fmt.Sprintf(balanceRankSQL, "excluded.source"), fmt.Sprintf(balanceRankSQL, "account_balances.source"))
+	for _, b := range balances {
+		acctID, err := ids.account(ctx, ingest.Account{ExternalID: b.AccountExternalID})
+		if err != nil {
+			return err
+		}
+		src := b.Source
+		if src == "" {
+			src = ingest.BalanceReported
+		}
+		if _, err := tx.ExecContext(ctx, q, acctID, b.Date, b.Amount, src, importID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func savePerformance(ctx context.Context, tx *sql.Tx, ids *idCache, importID int64, perf []ingest.PeriodPerformance) error {
+	for _, p := range perf {
+		acctID, err := ids.account(ctx, ingest.Account{ExternalID: p.AccountExternalID})
+		if err != nil {
+			return err
+		}
+		secID, err := ids.security(ctx, p.Security)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO period_performance (account_id, security_id, import_id, period_start, period_end,
+				starting_balance_cents, ending_balance_cents, gain_loss_cents, other_activity_cents, return_pct)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (account_id, security_id, period_start, period_end) DO UPDATE SET
+				import_id = excluded.import_id,
+				starting_balance_cents = excluded.starting_balance_cents,
+				ending_balance_cents = excluded.ending_balance_cents,
+				gain_loss_cents = excluded.gain_loss_cents,
+				other_activity_cents = excluded.other_activity_cents,
+				return_pct = excluded.return_pct`,
+			acctID, secID, importID, p.PeriodStart, p.PeriodEnd,
+			p.StartingBalance, p.EndingBalance, p.GainLoss, p.OtherActivity, p.ReturnPct); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func nullFloat(f float64) *float64 {
 	if f == 0 {
 		return nil
@@ -247,17 +310,22 @@ func (c *idCache) security(ctx context.Context, s ingest.Security) (int64, error
 		typ = ingest.SecurityUnknown
 	}
 	var err error
+	// Fill in type/asset class when a later source knows more, but never
+	// overwrite what's already known.
+	const fill = `
+				security_type = CASE WHEN securities.security_type = 'unknown' THEN excluded.security_type ELSE securities.security_type END,
+				asset_class = COALESCE(securities.asset_class, excluded.asset_class)`
+	assetClass := nullString(s.AssetClass)
 	if s.Symbol != "" {
 		_, err = c.tx.ExecContext(ctx, `
-			INSERT INTO securities (symbol, name, security_type, created_at) VALUES (?, ?, ?, ?)
-			ON CONFLICT (symbol) WHERE symbol IS NOT NULL DO UPDATE SET
-				security_type = CASE WHEN securities.security_type = 'unknown' THEN excluded.security_type ELSE securities.security_type END`,
-			s.Symbol, name, typ, nowRFC3339())
+			INSERT INTO securities (symbol, name, security_type, asset_class, created_at) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (symbol) WHERE symbol IS NOT NULL DO UPDATE SET`+fill,
+			s.Symbol, name, typ, assetClass, nowRFC3339())
 	} else {
 		_, err = c.tx.ExecContext(ctx, `
-			INSERT INTO securities (symbol, name, security_type, created_at) VALUES (NULL, ?, ?, ?)
-			ON CONFLICT (name) WHERE symbol IS NULL DO NOTHING`,
-			name, typ, nowRFC3339())
+			INSERT INTO securities (symbol, name, security_type, asset_class, created_at) VALUES (NULL, ?, ?, ?, ?)
+			ON CONFLICT (name) WHERE symbol IS NULL DO UPDATE SET`+fill,
+			name, typ, assetClass, nowRFC3339())
 	}
 	if err != nil {
 		return 0, err
@@ -273,6 +341,13 @@ func (c *idCache) security(ctx context.Context, s ingest.Security) (int64, error
 	}
 	c.securities[key] = id
 	return id, nil
+}
+
+func nullString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func last4(s string) string {

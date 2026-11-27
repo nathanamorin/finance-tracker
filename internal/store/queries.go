@@ -214,6 +214,7 @@ type Holding struct {
 	Symbol       *string  `json:"symbol"`
 	SecurityName string   `json:"security_name"`
 	SecurityType string   `json:"security_type"`
+	AssetClass   *string  `json:"asset_class"`
 	AsOfDate     string   `json:"as_of_date"`
 	Quantity     float64  `json:"quantity"`
 	Price        *float64 `json:"price"`
@@ -223,7 +224,7 @@ type Holding struct {
 // LatestHoldings returns each account's most recent snapshot.
 func (s *Store) LatestHoldings(ctx context.Context) ([]Holding, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT h.account_id, a.name, h.security_id, s.symbol, s.name, s.security_type, h.as_of_date,
+		SELECT h.account_id, a.name, h.security_id, s.symbol, s.name, s.security_type, s.asset_class, h.as_of_date,
 			h.quantity, h.price, h.market_value_cents
 		FROM holdings h
 		JOIN accounts a ON a.id = h.account_id
@@ -240,7 +241,7 @@ func (s *Store) LatestHoldings(ctx context.Context) ([]Holding, error) {
 		var h Holding
 		var mv int64
 		if err := rows.Scan(&h.AccountID, &h.AccountName, &h.SecurityID, &h.Symbol, &h.SecurityName, &h.SecurityType,
-			&h.AsOfDate, &h.Quantity, &h.Price, &mv); err != nil {
+			&h.AssetClass, &h.AsOfDate, &h.Quantity, &h.Price, &mv); err != nil {
 			return nil, err
 		}
 		h.MarketValue = ingest.Cents(mv).Dollars()
@@ -255,11 +256,12 @@ type Security struct {
 	Symbol       *string `json:"symbol"`
 	Name         string  `json:"name"`
 	SecurityType string  `json:"security_type"`
+	AssetClass   *string `json:"asset_class"`
 }
 
 // ListSecurities returns every known security.
 func (s *Store) ListSecurities(ctx context.Context) ([]Security, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, symbol, name, security_type FROM securities ORDER BY COALESCE(symbol, name)`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, symbol, name, security_type, asset_class FROM securities ORDER BY COALESCE(symbol, name)`)
 	if err != nil {
 		return nil, err
 	}
@@ -267,10 +269,60 @@ func (s *Store) ListSecurities(ctx context.Context) ([]Security, error) {
 	out := []Security{}
 	for rows.Next() {
 		var sec Security
-		if err := rows.Scan(&sec.ID, &sec.Symbol, &sec.Name, &sec.SecurityType); err != nil {
+		if err := rows.Scan(&sec.ID, &sec.Symbol, &sec.Name, &sec.SecurityType, &sec.AssetClass); err != nil {
 			return nil, err
 		}
 		out = append(out, sec)
+	}
+	return out, rows.Err()
+}
+
+// Performance is a per-fund period summary.
+type Performance struct {
+	AccountID       int64    `json:"account_id"`
+	AccountName     string   `json:"account_name"`
+	SecurityID      int64    `json:"security_id"`
+	SecurityName    string   `json:"security_name"`
+	AssetClass      *string  `json:"asset_class"`
+	PeriodStart     string   `json:"period_start"`
+	PeriodEnd       string   `json:"period_end"`
+	StartingBalance float64  `json:"starting_balance"`
+	EndingBalance   float64  `json:"ending_balance"`
+	GainLoss        float64  `json:"gain_loss"`
+	OtherActivity   float64  `json:"other_activity"`
+	ReturnPct       *float64 `json:"return_pct"`
+}
+
+// LatestPerformance returns, for each account and fund, the most recent
+// reported period (latest end date; the longest period on ties).
+func (s *Store) LatestPerformance(ctx context.Context) ([]Performance, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT p.account_id, a.name, p.security_id, s.name, s.asset_class, p.period_start, p.period_end,
+			p.starting_balance_cents, p.ending_balance_cents, p.gain_loss_cents, p.other_activity_cents, p.return_pct
+		FROM period_performance p
+		JOIN accounts a ON a.id = p.account_id
+		JOIN securities s ON s.id = p.security_id
+		WHERE p.id = (
+			SELECT p2.id FROM period_performance p2
+			WHERE p2.account_id = p.account_id AND p2.security_id = p.security_id
+			ORDER BY p2.period_end DESC, p2.period_start ASC LIMIT 1)
+		  AND a.closed = 0
+		ORDER BY a.name, p.ending_balance_cents DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Performance{}
+	for rows.Next() {
+		var p Performance
+		var sb, eb, g, o int64
+		if err := rows.Scan(&p.AccountID, &p.AccountName, &p.SecurityID, &p.SecurityName, &p.AssetClass,
+			&p.PeriodStart, &p.PeriodEnd, &sb, &eb, &g, &o, &p.ReturnPct); err != nil {
+			return nil, err
+		}
+		p.StartingBalance, p.EndingBalance = ingest.Cents(sb).Dollars(), ingest.Cents(eb).Dollars()
+		p.GainLoss, p.OtherActivity = ingest.Cents(g).Dollars(), ingest.Cents(o).Dollars()
+		out = append(out, p)
 	}
 	return out, rows.Err()
 }

@@ -39,8 +39,11 @@ type Summary struct {
 	IncomeTTM               float64           `json:"income_ttm"`
 	LastImportAt            *string           `json:"last_import_at"`
 	AllocationByType        []AllocationSlice `json:"allocation_by_type"`
-	AllocationBySecurity    []AllocationSlice `json:"allocation_by_security"`
-	AllocationByAccount     []AllocationSlice `json:"allocation_by_account"`
+	// AllocationByClass uses the source's asset class where known
+	// (e.g. 401k funds), otherwise the security type.
+	AllocationByClass    []AllocationSlice `json:"allocation_by_class"`
+	AllocationBySecurity []AllocationSlice `json:"allocation_by_security"`
+	AllocationByAccount  []AllocationSlice `json:"allocation_by_account"`
 }
 
 // Summary computes dashboard headline numbers.
@@ -75,11 +78,16 @@ func (s *Store) Summary(ctx context.Context) (*Summary, error) {
 	if err != nil {
 		return nil, err
 	}
-	byType, bySec, byAcct := map[string]float64{}, map[string]float64{}, map[string]float64{}
+	byType, bySec, byAcct, byClass := map[string]float64{}, map[string]float64{}, map[string]float64{}, map[string]float64{}
 	secLabel := map[string]string{}
 	for _, h := range holdings {
 		sum.TotalValue += h.MarketValue
 		byType[h.SecurityType] += h.MarketValue
+		if h.AssetClass != nil && *h.AssetClass != "" {
+			byClass[*h.AssetClass] += h.MarketValue
+		} else {
+			byClass[h.SecurityType] += h.MarketValue
+		}
 		key := h.SecurityName
 		if h.Symbol != nil {
 			key = *h.Symbol
@@ -94,6 +102,7 @@ func (s *Store) Summary(ctx context.Context) (*Summary, error) {
 	}
 	sum.TotalValue = math.Round(sum.TotalValue*100) / 100
 	sum.AllocationByType = slices(byType, nil, sum.TotalValue)
+	sum.AllocationByClass = slices(byClass, nil, sum.TotalValue)
 	sum.AllocationBySecurity = slices(bySec, secLabel, sum.TotalValue)
 	sum.AllocationByAccount = slices(byAcct, nil, sum.TotalValue)
 	return &sum, nil
@@ -153,6 +162,11 @@ type ValueHistory struct {
 // valued at the latest known price on or before d (prices come from trade
 // prices and snapshots, so values between trades are approximations until
 // a market-data source is added).
+//
+// Accounts with no transactions at all (e.g. 401k fund summaries, or bank
+// sources that only report balances) can't be reconstructed. They use
+// their recorded balances instead, carried forward from each balance date,
+// and contribute nothing before their first balance.
 func (s *Store) ValueHistory(ctx context.Context, interval string, accountID int64) (*ValueHistory, error) {
 	if interval == "" {
 		interval = "month"
@@ -220,6 +234,52 @@ func (s *Store) ValueHistory(ctx context.Context, interval string, accountID int
 		return nil, err
 	}
 
+	txAccounts := map[int64]bool{}
+	for k := range deltas {
+		txAccounts[k.acct] = true
+	}
+	rows, err = s.db.QueryContext(ctx, `SELECT DISTINCT account_id FROM transactions WHERE 1=1`+acctFilter, args...)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		txAccounts[id] = true
+	}
+	rows.Close()
+
+	// Balance series for accounts without transactions.
+	balanceSeries := map[int64][]pricePoint{}
+	rows, err = s.db.QueryContext(ctx, `
+		SELECT b.account_id, b.as_of_date, b.balance_cents FROM account_balances b
+		JOIN accounts a ON a.id = b.account_id WHERE a.closed = 0`+strings.ReplaceAll(acctFilter, "account_id", "b.account_id")+`
+		ORDER BY b.as_of_date`, args...)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var acct, cents int64
+		var date string
+		if err := rows.Scan(&acct, &date, &cents); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if !txAccounts[acct] {
+			balanceSeries[acct] = append(balanceSeries[acct], pricePoint{date, ingest.Cents(cents).Dollars()})
+			if start == "" || date < start {
+				start = date
+			}
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
 	// Anchors: each account's latest snapshot.
 	anchorDate := map[int64]string{}
 	anchorQty := map[posKey]float64{}
@@ -236,6 +296,9 @@ func (s *Store) ValueHistory(ctx context.Context, interval string, accountID int
 		if err := rows.Scan(&k.acct, &k.sec, &date, &qty); err != nil {
 			rows.Close()
 			return nil, err
+		}
+		if !txAccounts[k.acct] {
+			continue // valued from balances instead
 		}
 		anchorDate[k.acct] = date
 		anchorQty[k] += qty
@@ -328,6 +391,9 @@ func (s *Store) ValueHistory(ctx context.Context, interval string, accountID int
 			}
 			value += qty * p
 		}
+		for _, series := range balanceSeries {
+			value += balanceAt(series, d)
+		}
 		out.Points = append(out.Points, ValuePoint{
 			Date:             d,
 			Value:            math.Round(value*100) / 100,
@@ -400,6 +466,16 @@ func priceAt(pts []pricePoint, date string) (float64, bool) {
 		return pts[0].price, true
 	}
 	return pts[i-1].price, true
+}
+
+// balanceAt returns the latest balance on or before date, or 0 before the
+// first one (no backfill: the account isn't known to exist yet).
+func balanceAt(pts []pricePoint, date string) float64 {
+	i := sort.Search(len(pts), func(i int) bool { return pts[i].date > date })
+	if i == 0 {
+		return 0
+	}
+	return pts[i-1].price
 }
 
 func (s *Store) snapshotSeries(ctx context.Context, acctFilter string, args []any) ([]SnapshotPoint, string, error) {

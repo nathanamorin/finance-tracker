@@ -15,6 +15,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/nathanamorin/finance-tracker/internal/ingest"
+	"github.com/nathanamorin/finance-tracker/internal/ingest/benefitscenter"
 	"github.com/nathanamorin/finance-tracker/internal/ingest/vanguard"
 	"github.com/nathanamorin/finance-tracker/internal/keystore"
 	"github.com/nathanamorin/finance-tracker/internal/store"
@@ -37,7 +38,7 @@ func newTestServer(t *testing.T, devUser string) *echo.Echo {
 	return New(Config{
 		UserHeader: "X-Auth-Request-User", EmailHeader: "X-Auth-Request-Email",
 		DevUser: devUser, MaxUploadBytes: 5 << 20, Location: time.UTC,
-	}, m, ingest.NewRegistry(vanguard.CSV{}), nil)
+	}, m, ingest.NewRegistry(vanguard.CSV{}, benefitscenter.CSV{}), nil)
 }
 
 func do(e *echo.Echo, req *http.Request, user string) *httptest.ResponseRecorder {
@@ -62,7 +63,12 @@ func TestFailsClosedWithoutIdentity(t *testing.T) {
 
 func upload(t *testing.T, e *echo.Echo, user string) *httptest.ResponseRecorder {
 	t.Helper()
-	content, err := os.ReadFile(fixture)
+	return uploadFile(t, e, user, fixture)
+}
+
+func uploadFile(t *testing.T, e *echo.Echo, user, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +108,7 @@ func TestUploadAndPerUserIsolation(t *testing.T) {
 		t.Fatalf("bob sees %d of alice's transactions", page.Total)
 	}
 
-	for _, p := range []string{"/api/summary", "/api/accounts", "/api/holdings", "/api/reports/value-history?interval=week", "/api/reports/cash-flow", "/api/imports", "/api/meta"} {
+	for _, p := range []string{"/api/summary", "/api/accounts", "/api/holdings", "/api/reports/value-history?interval=week", "/api/reports/cash-flow", "/api/imports", "/api/meta", "/api/performance"} {
 		if rec := do(e, httptest.NewRequest(http.MethodGet, p, nil), "alice"); rec.Code != http.StatusOK {
 			t.Fatalf("%s: %d %s", p, rec.Code, rec.Body)
 		}
@@ -120,5 +126,28 @@ func TestRejectsUnknownFile(t *testing.T) {
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	if rec := do(e, req, ""); rec.Code != http.StatusBadRequest {
 		t.Fatalf("status %d %s", rec.Code, rec.Body)
+	}
+}
+
+// benefitsFixture is an anonymised real Benefits Center export. It is FAKE
+// DATA; see internal/ingest/benefitscenter/testdata/README.md.
+const benefitsFixture = "../ingest/benefitscenter/testdata/benefits_center_anonymised_export.csv"
+
+func TestUploadBenefitsCenter(t *testing.T) {
+	e := newTestServer(t, "")
+	rec := uploadFile(t, e, "alice", benefitsFixture)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("upload: %d %s", rec.Code, rec.Body)
+	}
+	var im store.Import
+	json.Unmarshal(rec.Body.Bytes(), &im)
+	if im.Source != "benefits_center_401k_csv" || im.HoldingsParsed != 1 || im.HoldingsAsOf == nil || *im.HoldingsAsOf != "2026-11-25" {
+		t.Fatalf("auto-detected import: %+v", im)
+	}
+	var perf []store.Performance
+	rec = do(e, httptest.NewRequest(http.MethodGet, "/api/performance", nil), "alice")
+	json.Unmarshal(rec.Body.Bytes(), &perf)
+	if len(perf) != 1 || perf[0].OtherActivity != 13426.39 {
+		t.Fatalf("performance: %+v", perf)
 	}
 }

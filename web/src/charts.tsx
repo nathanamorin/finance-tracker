@@ -75,7 +75,7 @@ export function ValueChart({ points }: { points: ValuePoint[] }) {
               cursor={{ stroke: "var(--axis)", strokeWidth: 1 }}
             />
             <Area
-              type="monotone"
+              type="linear"
               dataKey="value"
               name="Portfolio value"
               stroke="var(--series-1)"

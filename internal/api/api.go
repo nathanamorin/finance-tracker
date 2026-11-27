@@ -73,6 +73,7 @@ func New(cfg Config, stores *store.Manager, registry *ingest.Registry, webFS fs.
 	g.PATCH("/accounts/:id", s.updateAccount)
 	g.GET("/transactions", s.listTransactions)
 	g.GET("/holdings", s.listHoldings)
+	g.GET("/performance", s.listPerformance)
 	g.GET("/securities", s.listSecurities)
 	g.GET("/imports", s.listImports)
 	g.POST("/imports", s.createImport, middleware.BodyLimit(fmt.Sprintf("%dB", cfg.MaxUploadBytes+1<<20)))
@@ -226,6 +227,14 @@ func (s *Server) listHoldings(c echo.Context) error {
 		return err
 	}
 	return c.JSON(http.StatusOK, h)
+}
+
+func (s *Server) listPerformance(c echo.Context) error {
+	p, err := st(c).LatestPerformance(c.Request().Context())
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, p)
 }
 
 func (s *Server) listSecurities(c echo.Context) error {

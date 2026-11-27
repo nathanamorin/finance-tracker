@@ -64,7 +64,7 @@ export function Dashboard({ goImport }: { goImport: () => void }) {
         <div className="card-head">
           <div>
             <h2>Value over time</h2>
-            <div className="sub">Reconstructed from transactions, anchored to your latest positions snapshot</div>
+            <div className="sub">Reconstructed from transactions, anchored to your latest positions snapshot. Accounts without transactions (e.g. 401(k) fund summaries) use their reported balances, starting from their first balance date.</div>
           </div>
           <div className="controls" style={{ margin: 0 }}>
             <div className="seg" role="group" aria-label="Interval">
@@ -99,11 +99,11 @@ export function Dashboard({ goImport }: { goImport: () => void }) {
           <IncomeChart rows={cash} />
         </div>
         <div className="card">
-          <div className="card-head"><h2>Allocation</h2><span className="sub">by security type</span></div>
+          <div className="card-head"><h2>Allocation</h2><span className="sub">by asset class (or security type)</span></div>
           <div className="bars">
-            {summary.allocation_by_type.map((s) => (
+            {summary.allocation_by_class.map((s) => (
               <div className="bar-row" key={s.key}>
-                <div className="bar-label"><span>{humanize(s.label)}</span><span>{percent(s.weight)} · {moneyWhole(s.value)}</span></div>
+                <div className="bar-label"><span>{s.label.includes("_") || s.label === s.label.toLowerCase() ? humanize(s.label) : s.label.replace(/--/g, " · ")}</span><span>{percent(s.weight)} · {moneyWhole(s.value)}</span></div>
                 <div className="bar-track"><div className="bar-fill" style={{ width: `${Math.max(s.weight * 100, 1)}%` }} /></div>
               </div>
             ))}

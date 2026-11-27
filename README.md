@@ -1,7 +1,7 @@
 # Finance Tracker
 
 A self-hosted personal finance tracker. You upload exports from your financial
-institutions (Vanguard first). They are parsed into one standard schema and
+institutions (currently Vanguard and a 401(k) Benefits Center). They are parsed into one standard schema and
 stored in a **separate, encrypted SQLite database for each user**. The web UI
 shows value over time, contributions, income, allocation, positions and a
 searchable transaction ledger.
@@ -66,10 +66,11 @@ see which pages changed, and the encryption does not detect tampering.
 | Table | Purpose |
 |---|---|
 | `accounts` | One row per institution account. Name and type are user-editable. |
-| `securities` | Identified by symbol, or by name when there is no symbol. |
+| `securities` | Identified by symbol, or by name when there is no symbol. `asset_class` holds the source's own classification when it gives one. |
 | `transactions` | A normalized ledger. `type` is one of `buy, sell, dividend, reinvest, interest, capital_gain_lt/st, contribution, withdrawal, transfer_in/out, conversion_in/out, sweep_in/out, fee, tax_withholding, corporate_action, other`. The source's own label is kept in `source_type`. `quantity` is a signed share change; `amount_cents` is the signed effect on cash. `fingerprint` de-duplicates overlapping uploads. |
 | `holdings` | Point-in-time position snapshots per account. |
-| `account_balances` | Account value on a date, derived from holdings or reported directly by bank sources. |
+| `account_balances` | Account value on a date. `source` is `holdings` (computed from positions), `reported` (stated by the source) or `derived` (computed from other figures). When two disagree for the same date, holdings beat reported, and reported beats derived. |
+| `period_performance` | Per-fund summaries over a date range (gain/loss, other activity, return %) from fund-summary sources such as 401(k) sites. Kept out of `transactions` because successive downloads cover overlapping ranges. |
 | `prices` | Known prices per security per day, taken from trades and snapshots. Used to value history. |
 | `imports`, `import_files` | Each upload with its stats and warnings. The original file is kept (encrypted) so it can be re-parsed later. |
 
@@ -84,7 +85,10 @@ account's latest snapshot:
 This counts positions held before your earliest imported transaction, and
 the result always agrees with your latest positions. Between trades, each
 position is valued at the last known trade price. Adding a market-price
-source would make this exact.
+source would make this exact. Accounts with no transactions at all (such as
+401(k) fund summaries) can't be reconstructed this way. They use their
+recorded balances instead, carried forward from each balance date, and add
+nothing before their first balance.
 
 ## Data sources
 
@@ -102,14 +106,36 @@ flagged as warnings on the import.
 
 Test fixtures are in `internal/ingest/vanguard/testdata/`. **All of them are fake data**; see the README there.
 
+### 401(k) Benefits Center (`benefits_center_401k_csv`)
+
+This is the plan's fund summary CSV: `Plan Name, Date Range, Fund Name, Asset
+Class, Relative Risk, Balance, % Invested, Future Investments, Gain/Losses,
+Other Activity, Fund Returns, Units, Price (NAV)`. It is a **summary, not a
+transaction history**, so an import produces:
+
+- a positions snapshot dated at the **end of the file's Date Range** (the
+  upload form's as-of date is ignored), using units, NAV and balance per fund;
+- one `period_performance` row per fund;
+- a derived starting balance at the start of the range (Balance − Gain/Losses −
+  Other Activity), so value history has a real data point there.
+
+The plan name serves as the account ID, because the file has no account number.
+Use the "All Account" export, which combines every money source. Importing
+per-source exports as well would count the same money twice. "Other
+Activity" is not added to net contributions, because year-to-date downloads overlap.
+
+Fixtures are in `internal/ingest/benefitscenter/testdata/`. **All of them are fake data**; see the README there.
+
 ### Adding a source
 
 1. Create `internal/ingest/<name>/` with a type that implements `ingest.Source`
-   (`ID`, `Name`, `Description`, `Detect`, `Parse`). It returns an `ingest.Result`
+   (`internal/ingest/csvutil` has lenient number, date and date-range parsing and header lookup)
+   with `ID`, `Name`, `Description`, `Detect` and `Parse`. It returns an `ingest.Result`
    in the standard model and follows the sign conventions documented on
    `ingest.Transaction`. Parsers never touch the database.
 2. Register it in `cmd/server/main.go` (`ingest.NewRegistry(...)`).
-3. Add a fake-data fixture and tests.
+3. Add fixtures (with a `# FAKE DATA` banner on the first line, listed in a
+   `testdata/README.md`) and tests.
 
 Good next candidates: OFX/QFX (which covers most banks and brokerages), Fidelity
 and Schwab CSVs, and bank or credit card CSVs (the `category` column is
@@ -143,7 +169,7 @@ make docker     # build the production image
 
 All endpoints under `/api` require SSO.
 `GET /api/me`, `/api/meta`, `/api/summary`, `/api/accounts`, `PATCH /api/accounts/:id`,
-`GET /api/transactions?account_id&type&from&to&q&limit&offset`, `/api/holdings`,
+`GET /api/transactions?account_id&type&from&to&q&limit&offset`, `/api/holdings`, `/api/performance`,
 `/api/securities`, `/api/imports`, `POST /api/imports` (multipart: `file`, optional
 `source`, `as_of`), `GET /api/imports/:id/file`, `DELETE /api/imports/:id`,
 `GET /api/reports/value-history?interval=day|week|month`, `/api/reports/cash-flow?interval=month|year`.

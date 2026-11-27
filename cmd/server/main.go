@@ -30,6 +30,7 @@ import (
 
 	"github.com/nathanamorin/finance-tracker/internal/api"
 	"github.com/nathanamorin/finance-tracker/internal/ingest"
+	"github.com/nathanamorin/finance-tracker/internal/ingest/benefitscenter"
 	"github.com/nathanamorin/finance-tracker/internal/ingest/vanguard"
 	"github.com/nathanamorin/finance-tracker/internal/keystore"
 	"github.com/nathanamorin/finance-tracker/internal/store"
@@ -87,6 +88,7 @@ func run() error {
 	// Data sources, in auto-detection order. Add new parsers here.
 	registry := ingest.NewRegistry(
 		vanguard.CSV{},
+		benefitscenter.CSV{},
 	)
 
 	devUser := os.Getenv("FIN_TRACKER_DEV_USER")

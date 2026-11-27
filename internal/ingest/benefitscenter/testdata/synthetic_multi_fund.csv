@@ -1,0 +1,8 @@
+# FAKE DATA - hand-written synthetic file exercising parser edge cases. Not a real export. See README.md in this directory.
+"Plan Name","Date Range","Fund Name","Asset Class","Relative Risk","Balance","% Invested","Future Investments","Gain/Losses","Other Activity","Fund Returns","Units","Price (NAV)"
+"Example Co 401(k) Plan - All Account","Jan 01, 2026 - Oct 31, 2026","Large Cap  Index Fund","Stocks--US Stocks","Moderate","$60,000.00","60%","50%","+$4,000.00","+$6,000.00","8.10%","1,000.000000","$60.000000"
+"Example Co 401(k) Plan - All Account","Jan 01, 2026 - Oct 31, 2026","International Index Fund","Stocks--International Stocks","Aggressive","$25,000.00","25%","30%","+$1,500.00","+$2,000.00","6.00%","2,500.000000","$10.000000"
+"Example Co 401(k) Plan - All Account","Jan 01, 2026 - Oct 31, 2026","Stable Value Fund","Stable Value","Conservative","$15,000.00","15%","20%","+$300.00","-$1,200.00","2.05%","15,000.000000","$1.000000"
+"Example Co 401(k) Plan - All Account","Jan 01, 2026 - Oct 31, 2026","Bond Index Fund","Bonds","Conservative","$0.00","0%","0%","-$50.00","-$4,000.00","--","0.000000","$9.870000"
+"Example Co 401(k) Plan - All Account","Jan 01, 2026 - Oct 31, 2026","Total","","","$100,000.00","100%","100%","+$5,750.00","+$2,800.00","","",""
+"Example Co 401(k) Plan - All Account","bad date range","Broken Row Fund","Bonds","Conservative","$1.00","0%","0%","$0.00","$0.00","0%","1","$1.00"

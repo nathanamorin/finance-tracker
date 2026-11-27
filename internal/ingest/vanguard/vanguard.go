@@ -31,11 +31,11 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nathanamorin/finance-tracker/internal/ingest"
+	"github.com/nathanamorin/finance-tracker/internal/ingest/csvutil"
 )
 
 // Institution is the institution name stored on accounts from this source.
@@ -101,7 +101,7 @@ func (CSV) Parse(r io.Reader, opts ingest.ParseOptions) (*ingest.Result, error) 
 
 	var (
 		cur      section
-		cols     map[string]int
+		cols     csvutil.Header
 		seen     = map[string]int{} // identical-row counter for Occurrence
 		sawTable bool
 	)
@@ -116,16 +116,16 @@ func (CSV) Parse(r io.Reader, opts ingest.ParseOptions) (*ingest.Result, error) 
 			warn(line, "unreadable CSV row: %v", err)
 			continue
 		}
-		if isBlank(rec) {
+		if csvutil.IsBlank(rec) {
 			continue
 		}
 
 		if strings.EqualFold(strings.TrimSpace(rec[0]), "Account Number") {
-			cols = headerIndex(rec)
+			cols = csvutil.NewHeader(rec)
 			switch {
-			case has(cols, "trade date") && has(cols, "transaction type"):
+			case cols.Has("trade date", "transaction type"):
 				cur = sectionTransactions
-			case has(cols, "shares") && (has(cols, "total value") || has(cols, "share price")):
+			case cols.Has("shares") && (cols.Has("total value") || cols.Has("share price")):
 				cur = sectionPositions
 			default:
 				cur = sectionNone
@@ -135,12 +135,7 @@ func (CSV) Parse(r io.Reader, opts ingest.ParseOptions) (*ingest.Result, error) 
 			continue
 		}
 
-		get := func(name string) string {
-			if i, ok := cols[name]; ok && i < len(rec) {
-				return strings.TrimSpace(rec[i])
-			}
-			return ""
-		}
+		get := func(names ...string) string { return cols.Get(rec, names...) }
 
 		switch cur {
 		case sectionPositions:
@@ -190,11 +185,7 @@ func (CSV) Parse(r io.Reader, opts ingest.ParseOptions) (*ingest.Result, error) 
 			price, _ := parseNumber(get("share price"))
 			principal, _ := parseNumber(get("principal amount"))
 			// Older exports say "Commission Fees", newer "Commissions and Fees".
-			feesStr := get("commissions and fees")
-			if feesStr == "" {
-				feesStr = get("commission fees")
-			}
-			fees, _ := parseNumber(feesStr)
+			fees, _ := parseNumber(get("commissions and fees", "commission fees"))
 			netStr := get("net amount")
 			net, err := parseNumber(netStr)
 			if err != nil || netStr == "" {
@@ -351,30 +342,6 @@ func guessSecurityType(symbol, name string) ingest.SecurityType {
 	return ingest.SecurityUnknown
 }
 
-func headerIndex(rec []string) map[string]int {
-	m := make(map[string]int, len(rec))
-	for i, h := range rec {
-		h = strings.ToLower(strings.TrimSpace(h))
-		if h != "" {
-			if _, dup := m[h]; !dup {
-				m[h] = i
-			}
-		}
-	}
-	return m
-}
-
-func has(m map[string]int, k string) bool { _, ok := m[k]; return ok }
-
-func isBlank(rec []string) bool {
-	for _, f := range rec {
-		if strings.TrimSpace(f) != "" {
-			return false
-		}
-	}
-	return true
-}
-
 // looksLikeAccount accepts account identifiers (digits, possibly with
 // masking like "xxxx1234" or dashes) and rejects footer text.
 func looksLikeAccount(s string) bool {
@@ -394,38 +361,6 @@ func looksLikeAccount(s string) bool {
 	return digits >= 3
 }
 
-func parseNumber(s string) (float64, error) {
-	s = strings.TrimSpace(s)
-	if s == "" || s == "--" {
-		return 0, nil
-	}
-	neg := false
-	if strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") {
-		neg = true
-		s = s[1 : len(s)-1]
-	}
-	s = strings.NewReplacer("$", "", ",", "", " ", "").Replace(s)
-	v, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		return 0, err
-	}
-	if neg {
-		v = -v
-	}
-	return v, nil
-}
+func parseNumber(s string) (float64, error) { return csvutil.ParseNumber(s) }
 
-var dateLayouts = []string{"2006-01-02", "01/02/2006", "1/2/2006", "01/02/06", "1/2/06", "01-02-2006"}
-
-func parseDate(s string) (ingest.Date, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "", errors.New("empty date")
-	}
-	for _, layout := range dateLayouts {
-		if t, err := time.Parse(layout, s); err == nil {
-			return ingest.NewDate(t), nil
-		}
-	}
-	return "", fmt.Errorf("unrecognized date %q", s)
-}
+func parseDate(s string) (ingest.Date, error) { return csvutil.ParseDate(s) }
