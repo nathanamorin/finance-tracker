@@ -16,6 +16,7 @@ import (
 
 	"github.com/nathanamorin/finance-tracker/internal/ingest"
 	"github.com/nathanamorin/finance-tracker/internal/ingest/benefitscenter"
+	"github.com/nathanamorin/finance-tracker/internal/ingest/etrade"
 	"github.com/nathanamorin/finance-tracker/internal/ingest/vanguard"
 	"github.com/nathanamorin/finance-tracker/internal/keystore"
 	"github.com/nathanamorin/finance-tracker/internal/store"
@@ -38,7 +39,7 @@ func newTestServer(t *testing.T, devUser string) *echo.Echo {
 	return New(Config{
 		UserHeader: "X-Auth-Request-User", EmailHeader: "X-Auth-Request-Email",
 		DevUser: devUser, MaxUploadBytes: 5 << 20, Location: time.UTC,
-	}, m, ingest.NewRegistry(vanguard.CSV{}, benefitscenter.CSV{}), nil)
+	}, m, ingest.NewRegistry(vanguard.CSV{}, benefitscenter.CSV{}, etrade.RestrictedStock{}), nil)
 }
 
 func do(e *echo.Echo, req *http.Request, user string) *httptest.ResponseRecorder {
@@ -108,7 +109,7 @@ func TestUploadAndPerUserIsolation(t *testing.T) {
 		t.Fatalf("bob sees %d of alice's transactions", page.Total)
 	}
 
-	for _, p := range []string{"/api/summary", "/api/accounts", "/api/holdings", "/api/reports/value-history?interval=week", "/api/reports/cash-flow", "/api/imports", "/api/meta", "/api/performance"} {
+	for _, p := range []string{"/api/summary", "/api/accounts", "/api/holdings", "/api/reports/value-history?interval=week", "/api/reports/cash-flow", "/api/imports", "/api/meta", "/api/performance", "/api/equity"} {
 		if rec := do(e, httptest.NewRequest(http.MethodGet, p, nil), "alice"); rec.Code != http.StatusOK {
 			t.Fatalf("%s: %d %s", p, rec.Code, rec.Body)
 		}
@@ -149,5 +150,28 @@ func TestUploadBenefitsCenter(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &perf)
 	if len(perf) != 1 || perf[0].OtherActivity != 13426.39 {
 		t.Fatalf("performance: %+v", perf)
+	}
+}
+
+// etradeFixture is an anonymised real E*TRADE Restricted Stock export. It
+// is FAKE DATA; see internal/ingest/etrade/testdata/README.md.
+const etradeFixture = "../ingest/etrade/testdata/etrade_restricted_stock_anonymised.xlsx"
+
+func TestUploadETrade(t *testing.T) {
+	e := newTestServer(t, "")
+	rec := uploadFile(t, e, "alice", etradeFixture)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("upload: %d %s", rec.Code, rec.Body)
+	}
+	var im store.Import
+	json.Unmarshal(rec.Body.Bytes(), &im)
+	if im.Source != "etrade_restricted_stock_xlsx" || len(im.Warnings) != 0 {
+		t.Fatalf("auto-detected import: %+v", im)
+	}
+	var eq store.Equity
+	rec = do(e, httptest.NewRequest(http.MethodGet, "/api/equity", nil), "alice")
+	json.Unmarshal(rec.Body.Bytes(), &eq)
+	if len(eq.Grants) != 3 || eq.UnvestedValue < 15480 {
+		t.Fatalf("equity: %+v", eq)
 	}
 }

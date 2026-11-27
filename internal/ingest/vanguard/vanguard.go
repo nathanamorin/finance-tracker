@@ -53,8 +53,8 @@ func (CSV) Description() string {
 }
 
 // Detect looks for Vanguard's distinctive header rows.
-func (CSV) Detect(filename string, head []byte) bool {
-	h := strings.ToLower(string(head))
+func (CSV) Detect(filename string, content []byte) bool {
+	h := strings.ToLower(string(ingest.Head(content)))
 	if !strings.Contains(h, "account number") {
 		return false
 	}

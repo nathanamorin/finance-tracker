@@ -23,7 +23,7 @@ export function Dashboard({ goImport }: { goImport: () => void }) {
 
   if (error) return <p className="error">{error}</p>;
   if (!summary) return <p className="muted">Loading…</p>;
-  if (summary.transaction_count === 0 && summary.total_value === 0) {
+  if (summary.transaction_count === 0 && summary.total_value === 0 && summary.unvested_equity_value === 0) {
     return (
       <div className="card empty">
         <h2>No data yet</h2>
@@ -53,6 +53,17 @@ export function Dashboard({ goImport }: { goImport: () => void }) {
           <div className="value">{moneyWhole(growth)}</div>
           <div className="hint">includes positions held before the imported date range</div>
         </div>
+        {summary.unvested_equity_value > 0 && (
+          <div className="tile">
+            <div className="label">Unvested equity (not in total)</div>
+            <div className="value">{moneyWhole(summary.unvested_equity_value)}</div>
+            <div className="hint">
+              {summary.next_vest
+                ? `next vest ${shortDate(summary.next_vest.vest_date)} · ${moneyWhole(summary.next_vest.est_value)}`
+                : "no upcoming vests"}
+            </div>
+          </div>
+        )}
         <div className="tile">
           <div className="label">Income, trailing 12 months</div>
           <div className="value">{moneyWhole(summary.income_ttm)}</div>

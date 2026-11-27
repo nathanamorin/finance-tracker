@@ -10,7 +10,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { CashFlowRow, ValuePoint } from "./api";
+import type { CashFlowRow, UpcomingVest, ValuePoint } from "./api";
 import { money, moneyCompact, monthLabel, shortDate } from "./format";
 
 const axisProps = {
@@ -120,6 +120,27 @@ export function IncomeChart({ rows }: { rows: CashFlowRow[] }) {
             cursor={{ fill: "var(--surface-2)" }}
           />
           <Bar dataKey="income" name="Income" fill="var(--series-1)" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+/** Estimated value vesting on each upcoming vest date (pre-tax, at the latest price). */
+export function VestChart({ upcoming }: { upcoming: UpcomingVest[] }) {
+  const byDate = new Map<string, number>();
+  for (const u of upcoming) byDate.set(u.vest_date, (byDate.get(u.vest_date) ?? 0) + u.est_value);
+  const data = [...byDate.entries()].map(([date, value]) => ({ date, value: Math.round(value * 100) / 100 }));
+  if (data.length === 0) return <div className="empty">No upcoming vests.</div>;
+  return (
+    <div style={{ width: "100%", height: 220 }}>
+      <ResponsiveContainer>
+        <BarChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }} barCategoryGap={2}>
+          <CartesianGrid stroke="var(--grid)" vertical={false} />
+          <XAxis dataKey="date" {...axisProps} tickFormatter={shortDate} />
+          <YAxis {...axisProps} axisLine={false} tickFormatter={moneyCompact} width={56} />
+          <Tooltip content={<ChartTooltip labelFormat={shortDate} />} cursor={{ fill: "var(--surface-2)" }} />
+          <Bar dataKey="value" name="Est. value vesting" fill="var(--series-1)" radius={[4, 4, 0, 0]} maxBarSize={56} isAnimationActive={false} />
         </BarChart>
       </ResponsiveContainer>
     </div>

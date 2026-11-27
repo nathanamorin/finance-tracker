@@ -31,6 +31,7 @@ import (
 	"github.com/nathanamorin/finance-tracker/internal/api"
 	"github.com/nathanamorin/finance-tracker/internal/ingest"
 	"github.com/nathanamorin/finance-tracker/internal/ingest/benefitscenter"
+	"github.com/nathanamorin/finance-tracker/internal/ingest/etrade"
 	"github.com/nathanamorin/finance-tracker/internal/ingest/vanguard"
 	"github.com/nathanamorin/finance-tracker/internal/keystore"
 	"github.com/nathanamorin/finance-tracker/internal/store"
@@ -89,6 +90,7 @@ func run() error {
 	registry := ingest.NewRegistry(
 		vanguard.CSV{},
 		benefitscenter.CSV{},
+		etrade.RestrictedStock{},
 	)
 
 	devUser := os.Getenv("FIN_TRACKER_DEV_USER")

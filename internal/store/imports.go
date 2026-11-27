@@ -127,6 +127,12 @@ func (s *Store) SaveImport(ctx context.Context, sourceID, filename string, conte
 	if err := savePerformance(ctx, tx, ids, importID, res.Performance); err != nil {
 		return nil, err
 	}
+	if err := savePrices(ctx, tx, ids, res.Prices); err != nil {
+		return nil, err
+	}
+	if err := saveEquity(ctx, tx, ids, importID, res.HoldingsAsOf, res.EquityAwards); err != nil {
+		return nil, err
+	}
 
 	wj, _ := json.Marshal(warnings)
 	if _, err := tx.ExecContext(ctx, `
@@ -246,6 +252,83 @@ func savePerformance(ctx context.Context, tx *sql.Tx, ids *idCache, importID int
 			acctID, secID, importID, p.PeriodStart, p.PeriodEnd,
 			p.StartingBalance, p.EndingBalance, p.GainLoss, p.OtherActivity, p.ReturnPct); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func savePrices(ctx context.Context, tx *sql.Tx, ids *idCache, prices []ingest.Price) error {
+	for _, p := range prices {
+		if p.Price <= 0 {
+			continue
+		}
+		secID, err := ids.security(ctx, p.Security)
+		if err != nil {
+			return err
+		}
+		// A stated price beats one inferred from a trade, but never
+		// replaces a price taken from a positions snapshot that day.
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO prices (security_id, date, price, source) VALUES (?, ?, ?, 'reported')
+			ON CONFLICT (security_id, date) DO UPDATE SET price = excluded.price, source = excluded.source
+			WHERE prices.source != 'holding'`, secID, p.Date, p.Price); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// saveEquity upserts each award and replaces its tranches, unless the
+// stored snapshot of that grant is newer than this import's (re-importing
+// an old file must not roll a grant back).
+func saveEquity(ctx context.Context, tx *sql.Tx, ids *idCache, importID int64, asOf ingest.Date, awards []ingest.EquityAward) error {
+	for _, a := range awards {
+		acctID, err := ids.account(ctx, ingest.Account{ExternalID: a.AccountExternalID})
+		if err != nil {
+			return err
+		}
+		secID, err := ids.security(ctx, a.Security)
+		if err != nil {
+			return err
+		}
+		var grantID int64
+		var storedAsOf string
+		err = tx.QueryRowContext(ctx, `SELECT id, as_of_date FROM equity_grants WHERE account_id = ? AND grant_number = ?`,
+			acctID, a.GrantNumber).Scan(&grantID, &storedAsOf)
+		switch {
+		case err == nil && storedAsOf > string(asOf):
+			continue // keep the newer snapshot
+		case err != nil && !errors.Is(err, sql.ErrNoRows):
+			return err
+		}
+		if err := tx.QueryRowContext(ctx, `
+			INSERT INTO equity_grants (account_id, security_id, import_id, grant_number, award_type, grant_date, status,
+				granted_qty, vested_qty, unvested_qty, withheld_qty, sellable_qty, cancelled_qty, est_market_value_cents, as_of_date)
+			VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT (account_id, grant_number) DO UPDATE SET
+				security_id = excluded.security_id, import_id = excluded.import_id, award_type = excluded.award_type,
+				grant_date = excluded.grant_date, status = excluded.status, granted_qty = excluded.granted_qty,
+				vested_qty = excluded.vested_qty, unvested_qty = excluded.unvested_qty, withheld_qty = excluded.withheld_qty,
+				sellable_qty = excluded.sellable_qty, cancelled_qty = excluded.cancelled_qty,
+				est_market_value_cents = excluded.est_market_value_cents, as_of_date = excluded.as_of_date
+			RETURNING id`,
+			acctID, secID, importID, a.GrantNumber, a.AwardType, a.GrantDate, a.Status,
+			a.GrantedQty, a.VestedQty, a.UnvestedQty, a.WithheldQty, a.SellableQty, a.CancelledQty,
+			a.EstMarketValue, asOf).Scan(&grantID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM equity_vests WHERE grant_id = ?`, grantID); err != nil {
+			return err
+		}
+		for _, v := range a.Vests {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO equity_vests (grant_id, vest_period, vest_date, granted_qty, vested_qty, released_qty,
+					cancelled_qty, shares_withheld_for_taxes, released_amount_cents, taxes_paid_cents, tax_status)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))`,
+				grantID, v.Period, v.VestDate, v.GrantedQty, v.VestedQty, v.ReleasedQty, v.CancelledQty,
+				v.SharesWithheldForTaxes, v.ReleasedAmount, v.TaxesPaid, v.TaxStatus); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

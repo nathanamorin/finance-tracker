@@ -17,6 +17,9 @@ export interface Summary {
   income_ytd: number;
   income_ttm: number;
   last_import_at: string | null;
+  unvested_equity_value: number;
+  unvested_equity_shares: number;
+  next_vest: UpcomingVest | null;
   allocation_by_type: AllocationSlice[];
   allocation_by_class: AllocationSlice[];
   allocation_by_security: AllocationSlice[];
@@ -85,6 +88,43 @@ export interface Performance {
   other_activity: number;
   return_pct: number | null;
 }
+
+export interface EquityVest {
+  period: number;
+  vest_date: string;
+  granted_qty: number;
+  vested_qty: number;
+  released_qty: number;
+  cancelled_qty: number;
+  shares_withheld_for_taxes: number;
+  released_amount: number;
+  taxes_paid: number;
+  tax_status: string | null;
+  remaining_qty: number;
+  est_value: number;
+}
+export interface EquityGrant {
+  id: number;
+  account_name: string;
+  symbol: string;
+  grant_number: string;
+  award_type: string;
+  grant_date: string | null;
+  status: string | null;
+  granted_qty: number;
+  vested_qty: number;
+  unvested_qty: number;
+  withheld_qty: number;
+  sellable_qty: number;
+  cancelled_qty: number;
+  as_of_date: string;
+  price: number | null;
+  price_date: string | null;
+  unvested_value: number;
+  vests: EquityVest[];
+}
+export interface UpcomingVest { vest_date: string; symbol: string; grant_number: string; qty: number; est_value: number }
+export interface Equity { grants: EquityGrant[]; unvested_shares: number; unvested_value: number; upcoming: UpcomingVest[] }
 
 export interface Import {
   id: number;
@@ -158,6 +198,7 @@ export const api = {
     }),
   holdings: () => request<Holding[]>("/api/holdings"),
   performance: () => request<Performance[]>("/api/performance"),
+  equity: () => request<Equity>("/api/equity"),
   transactions: (f: { account_id?: number; type?: string; from?: string; to?: string; q?: string; limit?: number; offset?: number }) =>
     request<{ transactions: Transaction[]; total: number }>(`/api/transactions${qs(f)}`),
   imports: () => request<Import[]>("/api/imports"),

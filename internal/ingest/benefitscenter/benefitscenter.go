@@ -59,8 +59,8 @@ func (CSV) Description() string {
 var required = []string{"plan name", "date range", "fund name", "balance"}
 
 // Detect looks for the distinctive header row.
-func (CSV) Detect(filename string, head []byte) bool {
-	h := strings.ToLower(string(head))
+func (CSV) Detect(filename string, content []byte) bool {
+	h := strings.ToLower(string(ingest.Head(content)))
 	for _, col := range required {
 		if !strings.Contains(h, col) {
 			return false

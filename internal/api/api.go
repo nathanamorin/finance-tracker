@@ -74,6 +74,7 @@ func New(cfg Config, stores *store.Manager, registry *ingest.Registry, webFS fs.
 	g.GET("/transactions", s.listTransactions)
 	g.GET("/holdings", s.listHoldings)
 	g.GET("/performance", s.listPerformance)
+	g.GET("/equity", s.equity)
 	g.GET("/securities", s.listSecurities)
 	g.GET("/imports", s.listImports)
 	g.POST("/imports", s.createImport, middleware.BodyLimit(fmt.Sprintf("%dB", cfg.MaxUploadBytes+1<<20)))
@@ -237,6 +238,14 @@ func (s *Server) listPerformance(c echo.Context) error {
 	return c.JSON(http.StatusOK, p)
 }
 
+func (s *Server) equity(c echo.Context) error {
+	eq, err := st(c).Equity(c.Request().Context())
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, eq)
+}
+
 func (s *Server) listSecurities(c echo.Context) error {
 	secs, err := st(c).ListSecurities(c.Request().Context())
 	if err != nil {
@@ -284,11 +293,7 @@ func (s *Server) createImport(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, "unknown source "+id)
 		}
 	} else {
-		head := content
-		if len(head) > 8192 {
-			head = head[:8192]
-		}
-		if src, err = s.registry.Detect(fh.Filename, head); err != nil {
+		if src, err = s.registry.Detect(fh.Filename, content); err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 		}
 	}

@@ -86,7 +86,7 @@ export function Imports({ meta, onImported }: { meta: Meta; onImported: () => vo
         >
           {busy ? "Importing…" : `Drop a file here or click to choose (max ${meta.max_upload_mb} MB)`}
         </div>
-        <input ref={fileInput} type="file" accept=".csv,.ofx,.qfx,text/csv" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+        <input ref={fileInput} type="file" accept=".csv,.xlsx,.ofx,.qfx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
         <ul className="sub" style={{ marginTop: 12, paddingLeft: 18 }}>
           {meta.sources.map((s) => <li key={s.id}><strong>{s.name}:</strong> {s.description}</li>)}
         </ul>

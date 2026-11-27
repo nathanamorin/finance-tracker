@@ -29,16 +29,21 @@ type AllocationSlice struct {
 
 // Summary is the dashboard headline data.
 type Summary struct {
-	TotalValue              float64           `json:"total_value"`
-	AsOf                    *string           `json:"as_of"`
-	AccountCount            int               `json:"account_count"`
-	TransactionCount        int               `json:"transaction_count"`
-	NetContributionsAllTime float64           `json:"net_contributions_all_time"`
-	NetContributionsYTD     float64           `json:"net_contributions_ytd"`
-	IncomeYTD               float64           `json:"income_ytd"`
-	IncomeTTM               float64           `json:"income_ttm"`
-	LastImportAt            *string           `json:"last_import_at"`
-	AllocationByType        []AllocationSlice `json:"allocation_by_type"`
+	TotalValue              float64 `json:"total_value"`
+	AsOf                    *string `json:"as_of"`
+	AccountCount            int     `json:"account_count"`
+	TransactionCount        int     `json:"transaction_count"`
+	NetContributionsAllTime float64 `json:"net_contributions_all_time"`
+	NetContributionsYTD     float64 `json:"net_contributions_ytd"`
+	IncomeYTD               float64 `json:"income_ytd"`
+	IncomeTTM               float64 `json:"income_ttm"`
+	LastImportAt            *string `json:"last_import_at"`
+	// Unvested employer equity, valued at the latest price. Shown on its
+	// own and NOT included in TotalValue.
+	UnvestedEquityValue  float64           `json:"unvested_equity_value"`
+	UnvestedEquityShares float64           `json:"unvested_equity_shares"`
+	NextVest             *UpcomingVest     `json:"next_vest"`
+	AllocationByType     []AllocationSlice `json:"allocation_by_type"`
 	// AllocationByClass uses the source's asset class where known
 	// (e.g. 401k funds), otherwise the security type.
 	AllocationByClass    []AllocationSlice `json:"allocation_by_class"`
@@ -105,6 +110,16 @@ func (s *Store) Summary(ctx context.Context) (*Summary, error) {
 	sum.AllocationByClass = slices(byClass, nil, sum.TotalValue)
 	sum.AllocationBySecurity = slices(bySec, secLabel, sum.TotalValue)
 	sum.AllocationByAccount = slices(byAcct, nil, sum.TotalValue)
+
+	eq, err := s.Equity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sum.UnvestedEquityValue, sum.UnvestedEquityShares = eq.UnvestedValue, eq.UnvestedShares
+	if len(eq.Upcoming) > 0 {
+		next := eq.Upcoming[0]
+		sum.NextVest = &next
+	}
 	return &sum, nil
 }
 

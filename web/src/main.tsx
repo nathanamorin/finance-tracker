@@ -3,12 +3,13 @@ import { createRoot } from "react-dom/client";
 import { api, type Identity, type Meta } from "./api";
 import { Accounts } from "./pages/Accounts";
 import { Dashboard } from "./pages/Dashboard";
+import { EquityPage } from "./pages/Equity";
 import { Holdings } from "./pages/Holdings";
 import { Imports } from "./pages/Imports";
 import { Transactions } from "./pages/Transactions";
 import "./styles.css";
 
-const TABS = ["dashboard", "holdings", "transactions", "accounts", "import"] as const;
+const TABS = ["dashboard", "holdings", "equity", "transactions", "accounts", "import"] as const;
 type Tab = (typeof TABS)[number];
 
 const tabFromHash = (): Tab => {
@@ -55,6 +56,7 @@ function App() {
         <main key={`${tab}-${version}`}>
           {tab === "dashboard" && <Dashboard goImport={() => go("import")} />}
           {tab === "holdings" && <Holdings />}
+          {tab === "equity" && <EquityPage />}
           {tab === "transactions" && <Transactions />}
           {tab === "accounts" && <Accounts accountTypes={meta.account_types} />}
           {tab === "import" && <Imports meta={meta} onImported={() => setVersion((v) => v + 1)} />}

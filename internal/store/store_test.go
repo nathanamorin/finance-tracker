@@ -14,6 +14,7 @@ import (
 
 	"github.com/nathanamorin/finance-tracker/internal/ingest"
 	"github.com/nathanamorin/finance-tracker/internal/ingest/benefitscenter"
+	"github.com/nathanamorin/finance-tracker/internal/ingest/etrade"
 	"github.com/nathanamorin/finance-tracker/internal/ingest/vanguard"
 	"github.com/nathanamorin/finance-tracker/internal/keystore"
 )
@@ -337,5 +338,119 @@ func TestBenefitsCenterValueHistoryUsesBalances(t *testing.T) {
 	}
 	if v := vanguardOnly("2025-12-31"); v <= 0 || v > 190000 {
 		t.Fatalf("2025-12-31 should hold only the Vanguard reconstruction, got %v", v)
+	}
+}
+
+// E*TRADE Restricted Stock fixtures are FAKE DATA; see
+// internal/ingest/etrade/testdata/README.md.
+const (
+	etradeFixture   = "../ingest/etrade/testdata/etrade_restricted_stock_anonymised.xlsx"
+	etradeSynthetic = "../ingest/etrade/testdata/synthetic_vested_and_released.xlsx"
+)
+
+func importETrade(t *testing.T, s *Store, path string, asOf ingest.Date) *Import {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := etrade.RestrictedStock{}.Parse(bytes.NewReader(content), ingest.ParseOptions{AsOf: asOf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	im, err := s.SaveImport(context.Background(), etrade.RestrictedStock{}.ID(), filepath.Base(path), content, res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return im
+}
+
+func TestEquityUnvestedIsTrackedButNotNetWorth(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t, t.TempDir(), randomKey(t))
+	s, release, _ := m.Acquire(ctx, "alice")
+	defer release()
+
+	today := ingest.NewDate(time.Now().UTC())
+	importETrade(t, s, etradeFixture, today)
+	importETrade(t, s, etradeFixture, today) // idempotent
+
+	eq, err := s.Equity(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eq.Grants) != 3 || len(eq.Upcoming) != 3 {
+		t.Fatalf("grants=%d upcoming=%d", len(eq.Grants), len(eq.Upcoming))
+	}
+	if math.Abs(eq.UnvestedShares-41.246) > 1e-9 || math.Abs(eq.UnvestedValue-15488.99) > 1 {
+		t.Fatalf("unvested %v shares / $%v", eq.UnvestedShares, eq.UnvestedValue)
+	}
+	if eq.Upcoming[0].VestDate != "2027-02-16" || eq.Upcoming[2].VestDate != "2029-02-16" {
+		t.Fatalf("upcoming order: %+v", eq.Upcoming)
+	}
+	for _, g := range eq.Grants {
+		if len(g.Vests) != 1 {
+			t.Fatalf("grant %s has %d tranches after re-import", g.GrantNumber, len(g.Vests))
+		}
+	}
+
+	sum, _ := s.Summary(ctx)
+	if sum.TotalValue != 0 {
+		t.Fatalf("unvested RSUs leaked into total value: %v", sum.TotalValue)
+	}
+	if math.Abs(sum.UnvestedEquityValue-15488.99) > 1 || sum.NextVest == nil || sum.NextVest.VestDate != "2027-02-16" {
+		t.Fatalf("summary equity: %+v next=%+v", sum.UnvestedEquityValue, sum.NextVest)
+	}
+	vh, _ := s.ValueHistory(ctx, "month", 0)
+	for _, p := range vh.Points {
+		if p.Value != 0 {
+			t.Fatalf("unvested RSUs leaked into value history at %s: %v", p.Date, p.Value)
+		}
+	}
+	accts, _ := s.ListAccounts(ctx)
+	if len(accts) != 1 || accts[0].AccountType != "stock_plan" || accts[0].Name != "E*TRADE Stock Plan" {
+		t.Fatalf("accounts: %+v", accts)
+	}
+
+	// An older snapshot must not roll grants back.
+	importETrade(t, s, etradeFixture, "2020-01-01")
+	eq, _ = s.Equity(ctx)
+	if eq.Grants[0].AsOfDate != string(today) {
+		t.Fatalf("older import rolled grant back to %s", eq.Grants[0].AsOfDate)
+	}
+}
+
+func TestEquitySellableSharesAreHoldings(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t, t.TempDir(), randomKey(t))
+	s, release, _ := m.Acquire(ctx, "alice")
+	defer release()
+
+	im := importETrade(t, s, etradeSynthetic, ingest.NewDate(time.Now().UTC()))
+	sum, _ := s.Summary(ctx)
+	// 35 sellable shares × $200 count; 50 unvested × $200 don't.
+	if sum.TotalValue != 7000 || sum.UnvestedEquityValue != 10000 {
+		t.Fatalf("total=%v unvested=%v", sum.TotalValue, sum.UnvestedEquityValue)
+	}
+	eq, _ := s.Equity(ctx)
+	var cancelled EquityGrant
+	for _, g := range eq.Grants {
+		if g.GrantNumber == "SYN-002" {
+			cancelled = g
+		}
+	}
+	if len(cancelled.Vests) != 1 || cancelled.Vests[0].RemainingQty != 0 {
+		t.Fatalf("cancelled tranche should have nothing remaining: %+v", cancelled.Vests)
+	}
+	if len(eq.Upcoming) != 1 || eq.Upcoming[0].Qty != 50 || eq.Upcoming[0].EstValue != 10000 {
+		t.Fatalf("upcoming: %+v", eq.Upcoming)
+	}
+
+	if err := s.DeleteImport(ctx, im.ID); err != nil {
+		t.Fatal(err)
+	}
+	eq, _ = s.Equity(ctx)
+	if len(eq.Grants) != 0 {
+		t.Fatalf("grants survived import deletion: %d", len(eq.Grants))
 	}
 }

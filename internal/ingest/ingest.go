@@ -64,6 +64,7 @@ const (
 	AccountIRARoth        AccountType = "ira_roth"
 	Account401k           AccountType = "401k"
 	AccountHSA            AccountType = "hsa"
+	AccountStockPlan      AccountType = "stock_plan" // employer equity (RSU/ESPP/options)
 	Account529            AccountType = "529"
 	AccountChecking       AccountType = "checking"
 	AccountSavings        AccountType = "savings"
@@ -75,7 +76,7 @@ const (
 // AccountTypes lists every valid AccountType, for validation and UI pickers.
 var AccountTypes = []AccountType{
 	AccountUnknown, AccountBrokerage, AccountIRATraditional, AccountIRARoth, Account401k,
-	AccountHSA, Account529, AccountChecking, AccountSavings, AccountCreditCard, AccountLoan, AccountOther,
+	AccountHSA, AccountStockPlan, Account529, AccountChecking, AccountSavings, AccountCreditCard, AccountLoan, AccountOther,
 }
 
 // SecurityType is the normalized kind of security.
@@ -218,6 +219,50 @@ type PeriodPerformance struct {
 	ReturnPct         *float64
 }
 
+// Price is a security's price on a date.
+type Price struct {
+	Security Security
+	Date     Date
+	Price    float64
+}
+
+// EquityAward is one employer stock grant (e.g. an RSU grant) with its
+// vesting tranches, as of the import's snapshot date.
+//
+// Unvested shares are not owned yet: they are tracked and valued
+// separately and are never counted in account balances or net worth.
+// Vested shares that are released and sellable belong in Holdings.
+type EquityAward struct {
+	AccountExternalID string
+	Security          Security
+	GrantNumber       string // the plan's grant identifier; unique per account
+	AwardType         string // e.g. "RSU"
+	GrantDate         Date
+	Status            string
+	GrantedQty        float64
+	VestedQty         float64
+	UnvestedQty       float64
+	WithheldQty       float64 // shares withheld for taxes
+	SellableQty       float64
+	CancelledQty      float64
+	EstMarketValue    Cents // the source's estimate for outstanding shares
+	Vests             []EquityVest
+}
+
+// EquityVest is one vesting tranche of an award.
+type EquityVest struct {
+	Period                 int
+	VestDate               Date
+	GrantedQty             float64 // shares scheduled in this tranche
+	VestedQty              float64
+	ReleasedQty            float64
+	CancelledQty           float64
+	SharesWithheldForTaxes float64
+	ReleasedAmount         Cents // value at release, as reported
+	TaxesPaid              Cents
+	TaxStatus              string
+}
+
 // Result is everything a parser extracted from one file.
 type Result struct {
 	Institution  string
@@ -228,6 +273,11 @@ type Result struct {
 	HoldingsAsOf Date
 	Balances     []Balance
 	Performance  []PeriodPerformance
+	// Prices are market prices the source states (or implies), recorded
+	// for valuing positions and awards.
+	Prices []Price
+	// EquityAwards are employer stock awards (RSUs, ...) as of HoldingsAsOf.
+	EquityAwards []EquityAward
 	// Warnings are non-fatal problems (skipped rows, unknown types, ...)
 	// surfaced to the user on the import record.
 	Warnings []string
@@ -250,10 +300,20 @@ type Source interface {
 	// Description explains where to get the file.
 	Description() string
 	// Detect reports whether the file looks like this source's format,
-	// given its name and first few KB.
-	Detect(filename string, head []byte) bool
+	// given its name and full content. Text sources usually only need to
+	// look at the first few KB (see Head); binary formats such as xlsx
+	// need the whole file.
+	Detect(filename string, content []byte) bool
 	// Parse converts the file into the standardized model.
 	Parse(r io.Reader, opts ParseOptions) (*Result, error)
+}
+
+// Head returns at most the first 8 KB of content, for text sniffing.
+func Head(content []byte) []byte {
+	if len(content) > 8192 {
+		return content[:8192]
+	}
+	return content
 }
 
 // ErrUnknownSource is returned when no registered source matches a file.
@@ -281,9 +341,9 @@ func (r *Registry) Get(id string) (Source, bool) {
 }
 
 // Detect finds the first source that claims the file.
-func (r *Registry) Detect(filename string, head []byte) (Source, error) {
+func (r *Registry) Detect(filename string, content []byte) (Source, error) {
 	for _, s := range r.sources {
-		if s.Detect(filename, head) {
+		if s.Detect(filename, content) {
 			return s, nil
 		}
 	}
