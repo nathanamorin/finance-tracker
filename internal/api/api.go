@@ -4,6 +4,7 @@ package api
 import (
 	"bytes"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -83,6 +84,8 @@ func New(cfg Config, stores *store.Manager, registry *ingest.Registry, webFS fs.
 	g.GET("/reports/value-history", s.valueHistory)
 	g.GET("/reports/cash-flow", s.cashFlow)
 	g.GET("/reports/income", s.incomeBySecurity)
+	g.GET("/settings/:key", s.getSetting)
+	g.PUT("/settings/:key", s.putSetting, middleware.BodyLimit("80K"))
 
 	if webFS != nil {
 		e.GET("/*", spaHandler(webFS))
@@ -378,6 +381,30 @@ func (s *Server) incomeBySecurity(c echo.Context) error {
 		return err
 	}
 	return c.JSON(http.StatusOK, rows)
+}
+
+// getSetting returns {"value": <json or null>}.
+func (s *Server) getSetting(c echo.Context) error {
+	v, err := st(c).GetSetting(c.Request().Context(), c.Param("key"))
+	if err != nil {
+		return err
+	}
+	if v == nil {
+		v = json.RawMessage("null")
+	}
+	return c.JSON(http.StatusOK, map[string]json.RawMessage{"value": v})
+}
+
+// putSetting stores the raw JSON request body.
+func (s *Server) putSetting(c echo.Context) error {
+	body, err := io.ReadAll(io.LimitReader(c.Request().Body, store.MaxSettingBytes+1))
+	if err != nil {
+		return err
+	}
+	if err := st(c).PutSetting(c.Request().Context(), c.Param("key"), body); err != nil {
+		return err
+	}
+	return c.NoContent(http.StatusNoContent)
 }
 
 func pathID(c echo.Context) (int64, error) {

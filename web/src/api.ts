@@ -223,6 +223,9 @@ export const api = {
     return request<Import>("/api/imports", { method: "POST", body: fd });
   },
   deleteImport: (id: number) => request<void>(`/api/imports/${id}`, { method: "DELETE" }),
+  getSetting: <T,>(key: string) => request<{ value: T | null }>(`/api/settings/${key}`).then((r) => r.value),
+  putSetting: (key: string, value: unknown) =>
+    request<void>(`/api/settings/${key}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value) }),
   valueHistory: (interval: string, accountId?: number, includeUnvested = false) =>
     request<ValueHistory>(`/api/reports/value-history${qs({ interval, account_id: accountId, include_unvested: includeUnvested ? 1 : undefined })}`),
   income: (interval: string, accountId?: number) =>

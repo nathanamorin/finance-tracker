@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -198,5 +199,37 @@ func TestIncludeUnvestedParam(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &sum)
 	if !sum.IncludesUnvested || sum.TotalValue < 15480 {
 		t.Fatalf("summary: %+v", sum)
+	}
+}
+
+func TestSettingsRoundTripAndIsolation(t *testing.T) {
+	e := newTestServer(t, "")
+	get := func(user string) string {
+		rec := do(e, httptest.NewRequest(http.MethodGet, "/api/settings/projections", nil), user)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("get: %d %s", rec.Code, rec.Body)
+		}
+		return strings.TrimSpace(rec.Body.String())
+	}
+	if got := get("alice"); got != `{"value":null}` {
+		t.Fatalf("unset: %s", got)
+	}
+	req := httptest.NewRequest(http.MethodPut, "/api/settings/projections", strings.NewReader(`{"years":30}`))
+	if rec := do(e, req, "alice"); rec.Code != http.StatusNoContent {
+		t.Fatalf("put: %d %s", rec.Code, rec.Body)
+	}
+	if got := get("alice"); got != `{"value":{"years":30}}` {
+		t.Fatalf("after put: %s", got)
+	}
+	if got := get("bob"); got != `{"value":null}` {
+		t.Fatalf("bob sees alice's settings: %s", got)
+	}
+	bad := httptest.NewRequest(http.MethodPut, "/api/settings/projections", strings.NewReader(`{not json`))
+	if rec := do(e, bad, "alice"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid JSON: %d", rec.Code)
+	}
+	badKey := httptest.NewRequest(http.MethodGet, "/api/settings/..%2Fetc", nil)
+	if rec := do(e, badKey, "alice"); rec.Code != http.StatusBadRequest && rec.Code != http.StatusNotFound {
+		t.Fatalf("bad key: %d", rec.Code)
 	}
 }

@@ -91,6 +91,32 @@ source would make this exact. Accounts with no transactions at all (such as
 recorded balances instead, carried forward from each balance date, and add
 nothing before their first balance.
 
+## Projections
+
+The **Projections** tab explores possible future values from your current
+holdings. It runs entirely in the browser (`web/src/projection.ts`,
+unit-tested in `projection.test.ts`):
+
+- Holdings are grouped into asset classes: US stocks, international stocks,
+  bonds, cash and stable value, target-date funds, individual and company
+  stock (which includes unvested RSUs when "Include unvested" is on), and
+  other. The grouping is guessed from each holding's type, asset class and
+  name, and you can reassign any holding.
+- **Inputs:** timeframe (1 to 50 years); annual contribution (defaults to
+  the last 12 months of net contributions) with an optional yearly increase;
+  how new money splits across asset classes; inflation, with a
+  today's-dollars view; and each asset class's expected return and
+  volatility. The defaults are round placeholders, not forecasts.
+- **Model:** annual steps. Each asset class grows by its return, then the
+  year's contribution is added, with no rebalancing. The *expected* path
+  compounds the expected rates. A Monte Carlo run (1,000 seeded paths with
+  normally distributed returns, correlated through a shared market factor)
+  gives the 10th, 50th and 90th percentiles. Because of volatility drag, the
+  median ends below the expected path. Taxes, fees and withdrawals are not
+  modeled.
+- Settings are saved per user in their encrypted database through
+  `GET/PUT /api/settings/projections` (JSON, at most 64 KB).
+
 ## Data sources
 
 ### Vanguard (`vanguard_csv`)
@@ -184,7 +210,7 @@ reserved for these).
 ```bash
 make dev        # API on :8080 as user "dev"; a local master key is generated in .data/
 make web-dev    # Vite on :5173 with hot reload, proxying /api to :8080
-make test       # go vet, go test, frontend typecheck
+make test       # go vet, go test, frontend typecheck + vitest
 make docker     # build the production image
 ```
 
@@ -211,7 +237,8 @@ All endpoints under `/api` require SSO.
 `/api/securities`, `/api/imports`, `POST /api/imports` (multipart: `file`, optional
 `source`, `as_of`), `GET /api/imports/:id/file`, `DELETE /api/imports/:id`,
 `GET /api/reports/value-history?interval=day|week|month` (each point includes `by_account`), `/api/reports/cash-flow?interval=month|year`,
-`/api/reports/income?interval=month|year` (income by security, for the stacked income chart).
+`/api/reports/income?interval=month|year` (income by security, for the stacked income chart),
+`GET/PUT /api/settings/:key` (per-user JSON settings).
 `GET /healthz` is unauthenticated.
 
 ## CI

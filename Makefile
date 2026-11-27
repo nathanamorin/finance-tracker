@@ -27,7 +27,7 @@ web:
 test:
 	go vet ./...
 	go test ./...
-	cd web && npm run typecheck
+	cd web && npm run typecheck && npm test
 
 build: web
 	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o finance-tracker ./cmd/server

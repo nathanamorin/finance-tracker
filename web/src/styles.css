@@ -103,6 +103,15 @@ nav.tabs button[aria-current="page"] { background: var(--surface-2); color: var(
 .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--text-2); cursor: pointer; white-space: nowrap; }
 .toggle input { min-height: 0; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
 tr.unvested td { color: var(--text-2); }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.form-grid > label:not(.toggle) { display: flex; flex-direction: column; gap: 6px; font-size: 0.85rem; color: var(--text-2); }
+.form-grid input[type="range"] { accent-color: var(--accent); min-height: 0; padding: 0; border: 0; background: none; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row input { width: 140px; }
+button.link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 0.85rem; cursor: pointer; text-decoration: underline; }
+.inline-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 8px; vertical-align: baseline; }
+.num-input { width: 84px; text-align: right; }
+details.card > summary { cursor: pointer; list-style-position: inside; }
 .pill.unvested { background: transparent; border: 1px dashed var(--axis); }
 
 .card {

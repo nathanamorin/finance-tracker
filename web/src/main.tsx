@@ -6,10 +6,11 @@ import { Dashboard } from "./pages/Dashboard";
 import { EquityPage } from "./pages/Equity";
 import { Holdings } from "./pages/Holdings";
 import { Imports } from "./pages/Imports";
+import { Projections } from "./pages/Projections";
 import { Transactions } from "./pages/Transactions";
 import "./styles.css";
 
-const TABS = ["dashboard", "holdings", "equity", "transactions", "accounts", "import"] as const;
+const TABS = ["dashboard", "holdings", "equity", "projections", "transactions", "accounts", "import"] as const;
 type Tab = (typeof TABS)[number];
 
 // Per-browser preference; storage can be unavailable (private mode), so
@@ -81,6 +82,7 @@ function App() {
           {tab === "dashboard" && <Dashboard goImport={() => go("import")} includeUnvested={includeUnvested} />}
           {tab === "holdings" && <Holdings includeUnvested={includeUnvested} />}
           {tab === "equity" && <EquityPage />}
+          {tab === "projections" && <Projections includeUnvested={includeUnvested} />}
           {tab === "transactions" && <Transactions />}
           {tab === "accounts" && <Accounts accountTypes={meta.account_types} />}
           {tab === "import" && <Imports meta={meta} onImported={() => setVersion((v) => v + 1)} />}

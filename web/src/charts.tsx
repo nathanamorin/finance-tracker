@@ -11,6 +11,7 @@ import {
   YAxis,
 } from "recharts";
 import type { AccountRef, IncomeRow, UpcomingVest, ValuePoint } from "./api";
+import { BUCKETS, type BucketId, type ProjectionYear } from "./projection";
 import { money, moneyCompact, monthLabel, shortDate } from "./format";
 
 const axisProps = {
@@ -247,5 +248,102 @@ export function VestChart({ upcoming }: { upcoming: UpcomingVest[] }) {
         </BarChart>
       </ResponsiveContainer>
     </div>
+  );
+}
+
+/** Each bucket owns a fixed categorical slot (BUCKETS order), so its color
+ *  never changes when other buckets are empty or hidden. */
+export const bucketColor = (id: BucketId) => slot(BUCKETS.findIndex((b) => b.id === id));
+
+const yearLabel = (y: number) => (y === 0 ? "Today" : `Year ${y}`);
+
+function ProjectionTooltip({ active, payload, label, startYear }: { active?: boolean; label?: number; startYear: number; payload?: { payload: ProjectionYear }[] }) {
+  if (!active || !payload?.length || label == null) return null;
+  const y = payload[0].payload;
+  const row = (name: string, color: string, v: number, dashed = false) => (
+    <div className="t-row">
+      <span><span className="legend"><span className={`key${dashed ? " dashed" : ""}`} style={{ background: dashed ? undefined : color, color }} /></span>{name}</span>
+      <strong>{money(v)}</strong>
+    </div>
+  );
+  return (
+    <div className="chart-tooltip">
+      <div className="t-date">{yearLabel(label)} · {startYear + label}</div>
+      {row("Expected rates", "var(--series-2)", y.expected)}
+      {row("90th percentile", "var(--series-1)", y.p90)}
+      {row("Median", "var(--series-1)", y.p50)}
+      {row("10th percentile", "var(--series-1)", y.p10)}
+      {row("Contributed", "var(--muted)", y.contributed, true)}
+    </div>
+  );
+}
+
+/** Monte Carlo 10–90% band + median, the expected-rate path, and money put in. */
+export function ProjectionChart({ years, startYear }: { years: ProjectionYear[]; startYear: number }) {
+  const data = years.map((y) => ({ ...y, band: [y.p10, y.p90] as [number, number] }));
+  return (
+    <>
+      <div className="legend" style={{ marginBottom: 8 }}>
+        <span><span className="key" style={{ background: "var(--series-2)" }} />At expected rates</span>
+        <span><span className="key" style={{ background: "var(--series-1)" }} />Median outcome</span>
+        <span><span className="key swatch" style={{ background: "var(--series-1)", opacity: 0.25 }} />10th–90th percentile</span>
+        <span style={{ color: "var(--muted)" }}><span className="key dashed" /><span style={{ color: "var(--text-2)" }}>Total contributed</span></span>
+      </div>
+      <div style={{ width: "100%", height: 340 }}>
+        <ResponsiveContainer>
+          <ComposedChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+            <CartesianGrid stroke="var(--grid)" vertical={false} />
+            <XAxis dataKey="year" {...axisProps} tickFormatter={(y: number) => (y === 0 ? "Now" : `${startYear + y}`)} minTickGap={32} />
+            <YAxis {...axisProps} axisLine={false} tickFormatter={moneyCompact} width={64} />
+            <Tooltip content={<ProjectionTooltip startYear={startYear} />} cursor={{ stroke: "var(--axis)", strokeWidth: 1 }} />
+            <Area type="monotone" dataKey="band" stroke="none" fill="var(--series-1)" fillOpacity={0.16} isAnimationActive={false} activeDot={false} />
+            <Line type="monotone" dataKey="p50" stroke="var(--series-1)" strokeWidth={2} dot={false} activeDot={{ r: 4, stroke: "var(--surface)", strokeWidth: 2 }} isAnimationActive={false} />
+            <Line type="monotone" dataKey="expected" stroke="var(--series-2)" strokeWidth={2} dot={false} activeDot={{ r: 4, stroke: "var(--surface)", strokeWidth: 2 }} isAnimationActive={false} />
+            <Line type="stepAfter" dataKey="contributed" stroke="var(--muted)" strokeWidth={2} strokeDasharray="5 3" dot={false} activeDot={false} isAnimationActive={false} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    </>
+  );
+}
+
+/** Expected path, stacked by asset class. */
+export function BucketStackChart({ years, startYear, buckets }: { years: ProjectionYear[]; startYear: number; buckets: BucketId[] }) {
+  const data = years.map((y) => ({ year: y.year, ...y.byBucket }));
+  return (
+    <>
+      <div className="legend" style={{ marginBottom: 8 }}>
+        {buckets.map((id) => (
+          <span key={id}><span className="key swatch" style={{ background: bucketColor(id) }} />{BUCKETS.find((b) => b.id === id)!.label}</span>
+        ))}
+      </div>
+      <div style={{ width: "100%", height: 260 }}>
+        <ResponsiveContainer>
+          <ComposedChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+            <CartesianGrid stroke="var(--grid)" vertical={false} />
+            <XAxis dataKey="year" {...axisProps} tickFormatter={(y: number) => (y === 0 ? "Now" : `${startYear + y}`)} minTickGap={32} />
+            <YAxis {...axisProps} axisLine={false} tickFormatter={moneyCompact} width={64} />
+            <Tooltip
+              content={<ChartTooltip labelFormat={(y) => `${yearLabel(Number(y))} · ${startYear + Number(y)}`} total />}
+              cursor={{ stroke: "var(--axis)", strokeWidth: 1 }}
+            />
+            {buckets.map((id) => (
+              <Area
+                key={id}
+                type="monotone"
+                dataKey={id}
+                name={BUCKETS.find((b) => b.id === id)!.label}
+                stackId="b"
+                stroke="var(--surface)"
+                strokeWidth={1}
+                fill={bucketColor(id)}
+                fillOpacity={0.85}
+                isAnimationActive={false}
+              />
+            ))}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    </>
   );
 }
