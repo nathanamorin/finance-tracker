@@ -85,6 +85,10 @@ nav.tabs button {
 nav.tabs button:hover { background: var(--surface-2); }
 nav.tabs button[aria-current="page"] { background: var(--surface-2); color: var(--text); font-weight: 600; }
 .user { color: var(--muted); font-size: 0.85rem; }
+.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--text-2); cursor: pointer; white-space: nowrap; }
+.toggle input { min-height: 0; width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+tr.unvested td { color: var(--text-2); }
+.pill.unvested { background: transparent; border: 1px dashed var(--axis); }
 
 .card {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);

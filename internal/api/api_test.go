@@ -175,3 +175,28 @@ func TestUploadETrade(t *testing.T) {
 		t.Fatalf("equity: %+v", eq)
 	}
 }
+
+func TestIncludeUnvestedParam(t *testing.T) {
+	e := newTestServer(t, "")
+	if rec := uploadFile(t, e, "alice", etradeFixture); rec.Code != http.StatusCreated { // FAKE DATA
+		t.Fatalf("upload: %d", rec.Code)
+	}
+	var holdings []store.Holding
+	rec := do(e, httptest.NewRequest(http.MethodGet, "/api/holdings?include_unvested=1", nil), "alice")
+	json.Unmarshal(rec.Body.Bytes(), &holdings)
+	if len(holdings) != 1 || !holdings[0].Unvested {
+		t.Fatalf("holdings with unvested: %+v", holdings)
+	}
+	rec = do(e, httptest.NewRequest(http.MethodGet, "/api/holdings", nil), "alice")
+	holdings = nil
+	json.Unmarshal(rec.Body.Bytes(), &holdings)
+	if len(holdings) != 0 {
+		t.Fatalf("default holdings should exclude unvested: %+v", holdings)
+	}
+	var sum store.Summary
+	rec = do(e, httptest.NewRequest(http.MethodGet, "/api/summary?include_unvested=true", nil), "alice")
+	json.Unmarshal(rec.Body.Bytes(), &sum)
+	if !sum.IncludesUnvested || sum.TotalValue < 15480 {
+		t.Fatalf("summary: %+v", sum)
+	}
+}

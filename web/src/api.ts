@@ -9,6 +9,7 @@ export interface Meta { sources: Source[]; account_types: string[]; max_upload_m
 export interface AllocationSlice { key: string; label: string; value: number; weight: number }
 export interface Summary {
   total_value: number;
+  includes_unvested: boolean;
   as_of: string | null;
   account_count: number;
   transaction_count: number;
@@ -72,6 +73,7 @@ export interface Holding {
   quantity: number;
   price: number | null;
   market_value: number;
+  unvested: boolean;
 }
 
 export interface Performance {
@@ -188,7 +190,7 @@ const qs = (params: Record<string, string | number | undefined>) => {
 export const api = {
   me: () => request<Identity>("/api/me"),
   meta: () => request<Meta>("/api/meta"),
-  summary: () => request<Summary>("/api/summary"),
+  summary: (includeUnvested = false) => request<Summary>(`/api/summary${qs({ include_unvested: includeUnvested ? 1 : undefined })}`),
   accounts: () => request<Account[]>("/api/accounts"),
   updateAccount: (id: number, body: Partial<Pick<Account, "name" | "account_type" | "closed">>) =>
     request<void>(`/api/accounts/${id}`, {
@@ -196,7 +198,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-  holdings: () => request<Holding[]>("/api/holdings"),
+  holdings: (includeUnvested = false) => request<Holding[]>(`/api/holdings${qs({ include_unvested: includeUnvested ? 1 : undefined })}`),
   performance: () => request<Performance[]>("/api/performance"),
   equity: () => request<Equity>("/api/equity"),
   transactions: (f: { account_id?: number; type?: string; from?: string; to?: string; q?: string; limit?: number; offset?: number }) =>
@@ -210,8 +212,8 @@ export const api = {
     return request<Import>("/api/imports", { method: "POST", body: fd });
   },
   deleteImport: (id: number) => request<void>(`/api/imports/${id}`, { method: "DELETE" }),
-  valueHistory: (interval: string, accountId?: number) =>
-    request<ValueHistory>(`/api/reports/value-history${qs({ interval, account_id: accountId })}`),
+  valueHistory: (interval: string, accountId?: number, includeUnvested = false) =>
+    request<ValueHistory>(`/api/reports/value-history${qs({ interval, account_id: accountId, include_unvested: includeUnvested ? 1 : undefined })}`),
   cashFlow: (interval: string, accountId?: number) =>
     request<CashFlowRow[]>(`/api/reports/cash-flow${qs({ interval, account_id: accountId })}`),
 };

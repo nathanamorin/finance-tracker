@@ -162,7 +162,7 @@ func (s *Server) meta(c echo.Context) error {
 }
 
 func (s *Server) summary(c echo.Context) error {
-	sum, err := st(c).Summary(c.Request().Context())
+	sum, err := st(c).Summary(c.Request().Context(), reportOptions(c))
 	if err != nil {
 		return err
 	}
@@ -222,12 +222,27 @@ func (s *Server) listTransactions(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{"transactions": txs, "total": total})
 }
 
+// listHoldings returns owned positions, followed by unvested equity rows
+// (unvested: true) when include_unvested is set.
 func (s *Server) listHoldings(c echo.Context) error {
 	h, err := st(c).LatestHoldings(c.Request().Context())
 	if err != nil {
 		return err
 	}
+	if reportOptions(c).IncludeUnvested {
+		u, err := st(c).UnvestedHoldings(c.Request().Context())
+		if err != nil {
+			return err
+		}
+		h = append(h, u...)
+	}
 	return c.JSON(http.StatusOK, h)
+}
+
+// reportOptions reads ?include_unvested=1|true.
+func reportOptions(c echo.Context) store.ReportOptions {
+	v := strings.ToLower(c.QueryParam("include_unvested"))
+	return store.ReportOptions{IncludeUnvested: v == "1" || v == "true" || v == "yes"}
 }
 
 func (s *Server) listPerformance(c echo.Context) error {
@@ -341,7 +356,7 @@ func (s *Server) deleteImport(c echo.Context) error {
 }
 
 func (s *Server) valueHistory(c echo.Context) error {
-	vh, err := st(c).ValueHistory(c.Request().Context(), c.QueryParam("interval"), queryInt(c, "account_id"))
+	vh, err := st(c).ValueHistory(c.Request().Context(), c.QueryParam("interval"), queryInt(c, "account_id"), reportOptions(c))
 	if err != nil {
 		return err
 	}

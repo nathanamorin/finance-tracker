@@ -12,6 +12,17 @@ import "./styles.css";
 const TABS = ["dashboard", "holdings", "equity", "transactions", "accounts", "import"] as const;
 type Tab = (typeof TABS)[number];
 
+// Per-browser preference; storage can be unavailable (private mode), so
+// every access is guarded and the default applies.
+const UNVESTED_KEY = "include-unvested";
+const loadIncludeUnvested = () => {
+  try {
+    return localStorage.getItem(UNVESTED_KEY) !== "0";
+  } catch {
+    return true;
+  }
+};
+
 const tabFromHash = (): Tab => {
   const h = location.hash.replace("#", "") as Tab;
   return TABS.includes(h) ? h : "dashboard";
@@ -24,6 +35,15 @@ function App() {
   const [error, setError] = useState<string>();
   // Bumped after imports so other tabs re-fetch when shown.
   const [version, setVersion] = useState(0);
+  const [includeUnvested, setIncludeUnvested] = useState(loadIncludeUnvested);
+  const toggleUnvested = (v: boolean) => {
+    setIncludeUnvested(v);
+    try {
+      localStorage.setItem(UNVESTED_KEY, v ? "1" : "0");
+    } catch {
+      /* preference just won't persist */
+    }
+  };
 
   useEffect(() => {
     api.me().then(setMe).catch((e) => setError(e.message));
@@ -49,13 +69,17 @@ function App() {
             </button>
           ))}
         </nav>
+        <label className="toggle" title="Count unvested RSUs (at the latest price) in totals, allocation and value history">
+          <input type="checkbox" checked={includeUnvested} onChange={(e) => toggleUnvested(e.target.checked)} />
+          Include unvested
+        </label>
         {me && <span className="user" title={me.user_id}>{me.email || me.user_id}</span>}
       </header>
       {error && <p className="error">{error}</p>}
       {meta && (
-        <main key={`${tab}-${version}`}>
-          {tab === "dashboard" && <Dashboard goImport={() => go("import")} />}
-          {tab === "holdings" && <Holdings />}
+        <main key={`${tab}-${version}-${includeUnvested}`}>
+          {tab === "dashboard" && <Dashboard goImport={() => go("import")} includeUnvested={includeUnvested} />}
+          {tab === "holdings" && <Holdings includeUnvested={includeUnvested} />}
           {tab === "equity" && <EquityPage />}
           {tab === "transactions" && <Transactions />}
           {tab === "accounts" && <Accounts accountTypes={meta.account_types} />}

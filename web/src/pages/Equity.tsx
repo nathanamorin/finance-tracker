@@ -26,7 +26,7 @@ export function EquityPage() {
         <div className="tile">
           <div className="label">Unvested value</div>
           <div className="value">{moneyWhole(eq.unvested_value)}</div>
-          <div className="hint">pre-tax estimate · not included in total value</div>
+          <div className="hint">pre-tax estimate · counted in totals when "Include unvested" is on</div>
         </div>
         <div className="tile">
           <div className="label">Unvested shares</div>

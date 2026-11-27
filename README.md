@@ -72,7 +72,7 @@ see which pages changed, and the encryption does not detect tampering.
 | `account_balances` | Account value on a date. `source` is `holdings` (computed from positions), `reported` (stated by the source) or `derived` (computed from other figures). When two disagree for the same date, holdings beat reported, and reported beats derived. |
 | `period_performance` | Per-fund summaries over a date range (gain/loss, other activity, return %) from fund-summary sources such as 401(k) sites. Kept out of `transactions` because successive downloads cover overlapping ranges. |
 | `prices` | Known prices per security per day, taken from trades and snapshots. Used to value history. |
-| `equity_grants`, `equity_vests` | Employer stock awards (RSUs) and their vesting tranches. **Unvested shares live only here.** They're valued at the latest price but are never counted as holdings, in balances, in total value or in value history. Vested, sellable shares are imported as ordinary holdings. |
+| `equity_grants`, `equity_vests` | Employer stock awards (RSUs) and their vesting tranches. **Unvested shares live only here**, never in `holdings` or `account_balances`. They're valued at the latest price, and reports count them only when asked to (see below). Vested, sellable shares are imported as ordinary holdings. |
 | `imports`, `import_files` | Each upload with its stats and warnings. The original file is kept (encrypted) so it can be re-parsed later. |
 
 Money is stored as integer cents. Re-uploading the same or an overlapping
@@ -143,8 +143,13 @@ import produces:
   upload's as-of date. The file has no date of its own;
 - a holding for **vested, sellable** shares, if there are any.
 
-Unvested value has its own Equity tab and a dashboard tile, and is kept
-out of net worth. Releases are recorded on the tranches but don't become
+Unvested shares appear on the Equity tab, in a dashboard tile, and as
+"Unvested RSU" rows on Holdings. An **Include unvested** switch in the header
+(on by default, remembered per browser) adds them to total value, the
+allocation panels and value over time. In the history, each tranche counts
+from its grant date until it vests. They never count toward "value minus
+contributions". In the API, add `?include_unvested=1` to `/api/summary`,
+`/api/holdings` and `/api/reports/value-history`. The default excludes them. Releases are recorded on the tranches but don't become
 transactions, so a brokerage transaction export would be needed for those.
 Other record types, such as tax withholding and dividends, are reported as
 warnings. The anonymised sample had no vested shares, so the released and

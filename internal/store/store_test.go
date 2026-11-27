@@ -96,7 +96,7 @@ func TestReportsAgreeWithSnapshot(t *testing.T) {
 	defer release()
 	importFixture(t, s)
 
-	sum, err := s.Summary(ctx)
+	sum, err := s.Summary(ctx, ReportOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestReportsAgreeWithSnapshot(t *testing.T) {
 		t.Fatalf("summary: %+v", sum)
 	}
 
-	vh, err := s.ValueHistory(ctx, "month", 0)
+	vh, err := s.ValueHistory(ctx, "month", 0, ReportOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestBenefitsCenterImport(t *testing.T) {
 		perf[0].StartingBalance != 97965.40 {
 		t.Fatalf("performance: %+v %v", perf, err)
 	}
-	sum, _ := s.Summary(ctx)
+	sum, _ := s.Summary(ctx, ReportOptions{})
 	if len(sum.AllocationByClass) != 1 || sum.AllocationByClass[0].Key != "Stocks--US Stocks" {
 		t.Fatalf("allocation by class: %+v", sum.AllocationByClass)
 	}
@@ -297,7 +297,7 @@ func TestBenefitsCenterValueHistoryUsesBalances(t *testing.T) {
 	defer release()
 	importBenefits(t, s)
 
-	vh, err := s.ValueHistory(ctx, "month", 0)
+	vh, err := s.ValueHistory(ctx, "month", 0, ReportOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,13 +322,13 @@ func TestBenefitsCenterValueHistoryUsesBalances(t *testing.T) {
 	// Combined with a transaction-based account, values add up and the
 	// 401k contributes nothing before its first balance.
 	importFixture(t, s)
-	vh, _ = s.ValueHistory(ctx, "month", 0)
-	sum, _ := s.Summary(ctx)
+	vh, _ = s.ValueHistory(ctx, "month", 0, ReportOptions{})
+	sum, _ := s.Summary(ctx, ReportOptions{})
 	if last := vh.Points[len(vh.Points)-1]; math.Abs(last.Value-sum.TotalValue) > 1 {
 		t.Fatalf("combined last %v vs total %v", last.Value, sum.TotalValue)
 	}
 	vanguardOnly := func(date string) float64 {
-		v, _ := s.ValueHistory(ctx, "month", 0)
+		v, _ := s.ValueHistory(ctx, "month", 0, ReportOptions{})
 		for _, p := range v.Points {
 			if p.Date == date {
 				return p.Value
@@ -394,14 +394,14 @@ func TestEquityUnvestedIsTrackedButNotNetWorth(t *testing.T) {
 		}
 	}
 
-	sum, _ := s.Summary(ctx)
+	sum, _ := s.Summary(ctx, ReportOptions{})
 	if sum.TotalValue != 0 {
 		t.Fatalf("unvested RSUs leaked into total value: %v", sum.TotalValue)
 	}
 	if math.Abs(sum.UnvestedEquityValue-15488.99) > 1 || sum.NextVest == nil || sum.NextVest.VestDate != "2027-02-16" {
 		t.Fatalf("summary equity: %+v next=%+v", sum.UnvestedEquityValue, sum.NextVest)
 	}
-	vh, _ := s.ValueHistory(ctx, "month", 0)
+	vh, _ := s.ValueHistory(ctx, "month", 0, ReportOptions{})
 	for _, p := range vh.Points {
 		if p.Value != 0 {
 			t.Fatalf("unvested RSUs leaked into value history at %s: %v", p.Date, p.Value)
@@ -427,7 +427,7 @@ func TestEquitySellableSharesAreHoldings(t *testing.T) {
 	defer release()
 
 	im := importETrade(t, s, etradeSynthetic, ingest.NewDate(time.Now().UTC()))
-	sum, _ := s.Summary(ctx)
+	sum, _ := s.Summary(ctx, ReportOptions{})
 	// 35 sellable shares × $200 count; 50 unvested × $200 don't.
 	if sum.TotalValue != 7000 || sum.UnvestedEquityValue != 10000 {
 		t.Fatalf("total=%v unvested=%v", sum.TotalValue, sum.UnvestedEquityValue)
@@ -452,5 +452,52 @@ func TestEquitySellableSharesAreHoldings(t *testing.T) {
 	eq, _ = s.Equity(ctx)
 	if len(eq.Grants) != 0 {
 		t.Fatalf("grants survived import deletion: %d", len(eq.Grants))
+	}
+}
+
+func TestEquityIncludeUnvestedOption(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t, t.TempDir(), randomKey(t))
+	s, release, _ := m.Acquire(ctx, "alice")
+	defer release()
+	importETrade(t, s, etradeFixture, ingest.NewDate(time.Now().UTC())) // FAKE DATA
+	incl := ReportOptions{IncludeUnvested: true}
+
+	sum, _ := s.Summary(ctx, incl)
+	if !sum.IncludesUnvested || math.Abs(sum.TotalValue-15488.99) > 1 {
+		t.Fatalf("total with unvested = %v", sum.TotalValue)
+	}
+	if len(sum.AllocationByAccount) != 1 || sum.AllocationByAccount[0].Label != "E*TRADE Stock Plan" {
+		t.Fatalf("allocation: %+v", sum.AllocationByAccount)
+	}
+	excl, _ := s.Summary(ctx, ReportOptions{})
+	if excl.TotalValue != 0 || excl.IncludesUnvested {
+		t.Fatalf("default must exclude unvested: %v", excl.TotalValue)
+	}
+
+	uh, err := s.UnvestedHoldings(ctx)
+	if err != nil || len(uh) != 1 || !uh[0].Unvested || math.Abs(uh[0].Quantity-41.246) > 1e-9 {
+		t.Fatalf("unvested holdings: %+v %v", uh, err)
+	}
+
+	vh, err := s.ValueHistory(ctx, "month", 0, incl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Starts at the first grant (2024-02-12); only grant 1 is outstanding
+	// until grant 2 on 2025-02-10.
+	if vh.Points[0].Date != "2024-02-29" {
+		t.Fatalf("first point %s", vh.Points[0].Date)
+	}
+	price := uh[0].MarketValue / uh[0].Quantity
+	if got, want := vh.Points[0].Value, 12.418*price; math.Abs(got-want) > 0.05 {
+		t.Fatalf("Feb 2024 value %v, want %v", got, want)
+	}
+	if last := vh.Points[len(vh.Points)-1]; math.Abs(last.Value-sum.TotalValue) > 0.05 {
+		t.Fatalf("today %v vs total %v", last.Value, sum.TotalValue)
+	}
+	// Default history still excludes it entirely.
+	if vh, _ := s.ValueHistory(ctx, "month", 0, ReportOptions{}); len(vh.Points) != 0 {
+		t.Fatalf("default history should be empty, got %d points", len(vh.Points))
 	}
 }

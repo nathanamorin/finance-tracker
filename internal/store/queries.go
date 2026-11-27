@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/nathanamorin/finance-tracker/internal/ingest"
@@ -219,6 +220,9 @@ type Holding struct {
 	Quantity     float64  `json:"quantity"`
 	Price        *float64 `json:"price"`
 	MarketValue  float64  `json:"market_value"`
+	// Unvested marks a row built from unvested equity awards: shown for
+	// visibility, but not owned yet.
+	Unvested bool `json:"unvested"`
 }
 
 // LatestHoldings returns each account's most recent snapshot.
@@ -323,6 +327,40 @@ func (s *Store) LatestPerformance(ctx context.Context) ([]Performance, error) {
 		p.StartingBalance, p.EndingBalance = ingest.Cents(sb).Dollars(), ingest.Cents(eb).Dollars()
 		p.GainLoss, p.OtherActivity = ingest.Cents(g).Dollars(), ingest.Cents(o).Dollars()
 		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// UnvestedHoldings returns unvested equity awards as holding-shaped rows
+// (Unvested = true), one per account and security, valued at the latest
+// known price. These are not owned positions; callers decide whether to
+// count them.
+func (s *Store) UnvestedHoldings(ctx context.Context) ([]Holding, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT g.account_id, a.name, g.security_id, s.symbol, s.name, s.security_type, s.asset_class,
+			max(g.as_of_date), sum(g.unvested_qty),
+			(SELECT price FROM prices WHERE security_id = g.security_id ORDER BY date DESC LIMIT 1)
+		FROM equity_grants g
+		JOIN accounts a ON a.id = g.account_id
+		JOIN securities s ON s.id = g.security_id
+		WHERE g.unvested_qty > 0 AND a.closed = 0
+		GROUP BY g.account_id, g.security_id
+		ORDER BY a.name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Holding{}
+	for rows.Next() {
+		h := Holding{Unvested: true}
+		if err := rows.Scan(&h.AccountID, &h.AccountName, &h.SecurityID, &h.Symbol, &h.SecurityName, &h.SecurityType,
+			&h.AssetClass, &h.AsOfDate, &h.Quantity, &h.Price); err != nil {
+			return nil, err
+		}
+		if h.Price != nil {
+			h.MarketValue = math.Round(h.Quantity**h.Price*100) / 100
+		}
+		out = append(out, h)
 	}
 	return out, rows.Err()
 }

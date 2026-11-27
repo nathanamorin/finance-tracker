@@ -19,6 +19,14 @@ func typeList(types []ingest.TxType) string {
 	return strings.Join(q, ",")
 }
 
+// ReportOptions tunes what reports count.
+type ReportOptions struct {
+	// IncludeUnvested counts unvested equity awards (valued at the latest
+	// price) in total value, allocations and value history. Off by
+	// default: unvested shares aren't owned yet.
+	IncludeUnvested bool
+}
+
 // AllocationSlice is one bucket of the portfolio.
 type AllocationSlice struct {
 	Key    string  `json:"key"`
@@ -29,7 +37,10 @@ type AllocationSlice struct {
 
 // Summary is the dashboard headline data.
 type Summary struct {
-	TotalValue              float64 `json:"total_value"`
+	TotalValue float64 `json:"total_value"`
+	// IncludesUnvested says whether TotalValue and the allocations count
+	// unvested equity (see ReportOptions).
+	IncludesUnvested        bool    `json:"includes_unvested"`
 	AsOf                    *string `json:"as_of"`
 	AccountCount            int     `json:"account_count"`
 	TransactionCount        int     `json:"transaction_count"`
@@ -38,8 +49,8 @@ type Summary struct {
 	IncomeYTD               float64 `json:"income_ytd"`
 	IncomeTTM               float64 `json:"income_ttm"`
 	LastImportAt            *string `json:"last_import_at"`
-	// Unvested employer equity, valued at the latest price. Shown on its
-	// own and NOT included in TotalValue.
+	// Unvested employer equity, valued at the latest price. Included in
+	// TotalValue only when IncludesUnvested is set.
 	UnvestedEquityValue  float64           `json:"unvested_equity_value"`
 	UnvestedEquityShares float64           `json:"unvested_equity_shares"`
 	NextVest             *UpcomingVest     `json:"next_vest"`
@@ -52,7 +63,7 @@ type Summary struct {
 }
 
 // Summary computes dashboard headline numbers.
-func (s *Store) Summary(ctx context.Context) (*Summary, error) {
+func (s *Store) Summary(ctx context.Context, opts ReportOptions) (*Summary, error) {
 	now := time.Now().In(s.loc)
 	ytd := fmt.Sprintf("%d-01-01", now.Year())
 	ttm := now.AddDate(-1, 0, 0).Format("2006-01-02")
@@ -82,6 +93,14 @@ func (s *Store) Summary(ctx context.Context) (*Summary, error) {
 	holdings, err := s.LatestHoldings(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if opts.IncludeUnvested {
+		unvested, err := s.UnvestedHoldings(ctx)
+		if err != nil {
+			return nil, err
+		}
+		holdings = append(holdings, unvested...)
+		sum.IncludesUnvested = true
 	}
 	byType, bySec, byAcct, byClass := map[string]float64{}, map[string]float64{}, map[string]float64{}, map[string]float64{}
 	secLabel := map[string]string{}
@@ -182,7 +201,7 @@ type ValueHistory struct {
 // sources that only report balances) can't be reconstructed. They use
 // their recorded balances instead, carried forward from each balance date,
 // and contribute nothing before their first balance.
-func (s *Store) ValueHistory(ctx context.Context, interval string, accountID int64) (*ValueHistory, error) {
+func (s *Store) ValueHistory(ctx context.Context, interval string, accountID int64, opts ReportOptions) (*ValueHistory, error) {
 	if interval == "" {
 		interval = "month"
 	}
@@ -335,6 +354,20 @@ func (s *Store) ValueHistory(ctx context.Context, interval string, accountID int
 		start = firstSnap
 	}
 	out := &ValueHistory{Interval: interval, Points: []ValuePoint{}, Snapshots: snapshots, UnpricedSecurities: []string{}}
+	if start == "" && opts.IncludeUnvested {
+		// Only equity awards: start the history at the earliest grant. (With
+		// other data, the start isn't moved earlier, so unvested awards can't
+		// stretch other accounts' reconstructions back past their data.)
+		var first *string
+		if err := s.db.QueryRowContext(ctx, `
+			SELECT min(g.grant_date) FROM equity_grants g JOIN accounts a ON a.id = g.account_id
+			WHERE a.closed = 0 AND g.grant_date IS NOT NULL`+strings.ReplaceAll(acctFilter, "account_id", "g.account_id"), args...).Scan(&first); err != nil {
+			return nil, err
+		}
+		if first != nil {
+			start = *first
+		}
+	}
 	if start == "" {
 		return out, nil
 	}
@@ -376,6 +409,38 @@ func (s *Store) ValueHistory(ctx context.Context, interval string, accountID int
 		return states[i].key.sec < states[j].key.sec
 	})
 
+	// Unvested tranches (optional): each counts from its grant date until
+	// its vest date, net of cancelled shares, valued like any position.
+	type tranche struct {
+		sec         int64
+		from, until string
+		qty         float64
+	}
+	var tranches []tranche
+	if opts.IncludeUnvested {
+		trows, err := s.db.QueryContext(ctx, `
+			SELECT g.security_id, COALESCE(g.grant_date, ''), v.vest_date, v.granted_qty - v.cancelled_qty
+			FROM equity_vests v
+			JOIN equity_grants g ON g.id = v.grant_id
+			JOIN accounts a ON a.id = g.account_id
+			WHERE a.closed = 0 AND v.granted_qty - v.cancelled_qty > 0`+strings.ReplaceAll(acctFilter, "account_id", "g.account_id"), args...)
+		if err != nil {
+			return nil, err
+		}
+		for trows.Next() {
+			var t tranche
+			if err := trows.Scan(&t.sec, &t.from, &t.until, &t.qty); err != nil {
+				trows.Close()
+				return nil, err
+			}
+			tranches = append(tranches, t)
+		}
+		trows.Close()
+		if err := trows.Err(); err != nil {
+			return nil, err
+		}
+	}
+
 	unpriced := map[int64]bool{}
 	fi := 0
 	var contrib, incomeSum int64
@@ -408,6 +473,15 @@ func (s *Store) ValueHistory(ctx context.Context, interval string, accountID int
 		}
 		for _, series := range balanceSeries {
 			value += balanceAt(series, d)
+		}
+		for _, t := range tranches {
+			if t.from <= d && d < t.until {
+				if p, ok := priceAt(prices[t.sec], d); ok {
+					value += t.qty * p
+				} else {
+					unpriced[t.sec] = true
+				}
+			}
 		}
 		out.Points = append(out.Points, ValuePoint{
 			Date:             d,

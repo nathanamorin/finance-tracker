@@ -5,7 +5,7 @@ import { humanize, money, moneyWhole, percent, shortDate } from "../format";
 
 const INTERVALS = ["week", "month"] as const;
 
-export function Dashboard({ goImport }: { goImport: () => void }) {
+export function Dashboard({ goImport, includeUnvested }: { goImport: () => void; includeUnvested: boolean }) {
   const [summary, setSummary] = useState<Summary>();
   const [history, setHistory] = useState<ValueHistory>();
   const [cash, setCash] = useState<CashFlowRow[]>([]);
@@ -14,12 +14,12 @@ export function Dashboard({ goImport }: { goImport: () => void }) {
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    api.summary().then(setSummary).catch((e) => setError(e.message));
+    api.summary(includeUnvested).then(setSummary).catch((e) => setError(e.message));
     api.cashFlow("month").then(setCash).catch((e) => setError(e.message));
   }, []);
   useEffect(() => {
-    api.valueHistory(interval).then(setHistory).catch((e) => setError(e.message));
-  }, [interval]);
+    api.valueHistory(interval, undefined, includeUnvested).then(setHistory).catch((e) => setError(e.message));
+  }, [interval, includeUnvested]);
 
   if (error) return <p className="error">{error}</p>;
   if (!summary) return <p className="muted">Loading…</p>;
@@ -33,7 +33,9 @@ export function Dashboard({ goImport }: { goImport: () => void }) {
     );
   }
 
-  const growth = summary.total_value - summary.net_contributions_all_time;
+  // Unvested awards are compensation not yet received, not investment growth.
+  const owned = summary.total_value - (summary.includes_unvested ? summary.unvested_equity_value : 0);
+  const growth = owned - summary.net_contributions_all_time;
 
   return (
     <>
@@ -41,7 +43,11 @@ export function Dashboard({ goImport }: { goImport: () => void }) {
         <div className="tile">
           <div className="label">Total value</div>
           <div className="value">{moneyWhole(summary.total_value)}</div>
-          <div className="hint">{summary.as_of ? `as of ${shortDate(summary.as_of)}` : "no positions imported"}</div>
+          <div className="hint">
+            {summary.includes_unvested && summary.unvested_equity_value > 0
+              ? `incl. ${moneyWhole(summary.unvested_equity_value)} unvested`
+              : summary.as_of ? `as of ${shortDate(summary.as_of)}` : "no positions imported"}
+          </div>
         </div>
         <div className="tile">
           <div className="label">Net contributions (imported history)</div>
@@ -55,7 +61,7 @@ export function Dashboard({ goImport }: { goImport: () => void }) {
         </div>
         {summary.unvested_equity_value > 0 && (
           <div className="tile">
-            <div className="label">Unvested equity (not in total)</div>
+            <div className="label">Unvested equity {summary.includes_unvested ? "(included in total)" : "(not in total)"}</div>
             <div className="value">{moneyWhole(summary.unvested_equity_value)}</div>
             <div className="hint">
               {summary.next_vest
