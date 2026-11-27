@@ -501,3 +501,75 @@ func TestEquityIncludeUnvestedOption(t *testing.T) {
 		t.Fatalf("default history should be empty, got %d points", len(vh.Points))
 	}
 }
+
+// Uses the FAKE DATA Vanguard, Benefits Center and E*TRADE fixtures.
+func TestValueHistoryByAccount(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t, t.TempDir(), randomKey(t))
+	s, release, _ := m.Acquire(ctx, "alice")
+	defer release()
+	importFixture(t, s)
+	importBenefits(t, s)
+	importETrade(t, s, etradeFixture, ingest.NewDate(time.Now().UTC()))
+
+	for _, opts := range []ReportOptions{{}, {IncludeUnvested: true}} {
+		vh, err := s.ValueHistory(ctx, "month", 0, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := 3 // two Vanguard accounts + the 401k
+		if opts.IncludeUnvested {
+			want = 4 // + E*TRADE Stock Plan
+		}
+		if len(vh.Accounts) != want {
+			t.Fatalf("include=%v: accounts %+v", opts.IncludeUnvested, vh.Accounts)
+		}
+		for i := 1; i < len(vh.Accounts); i++ {
+			if vh.Accounts[i].ID <= vh.Accounts[i-1].ID {
+				t.Fatal("accounts must be in stable ID order")
+			}
+		}
+		for _, p := range vh.Points {
+			var sum float64
+			for _, v := range p.ByAccount {
+				sum += v
+			}
+			if math.Abs(sum-p.Value) > 0.02 {
+				t.Fatalf("%s: accounts sum %v != total %v", p.Date, sum, p.Value)
+			}
+		}
+	}
+}
+
+func TestIncomeBySecurity(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t, t.TempDir(), randomKey(t))
+	s, release, _ := m.Acquire(ctx, "alice")
+	defer release()
+	importFixture(t, s) // FAKE DATA
+
+	rows, err := s.IncomeBySecurity(ctx, "month", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cf, _ := s.CashFlow(ctx, "month", 0)
+	perPeriod := map[string]float64{}
+	labels := map[string]bool{}
+	for _, r := range rows {
+		perPeriod[r.Period] += r.Amount
+		labels[r.Label] = true
+	}
+	for _, c := range cf {
+		if want := c.Dividends + c.Interest + c.CapitalGains; math.Abs(perPeriod[c.Period]-want) > 0.005 {
+			t.Fatalf("%s: by-security %v != cash flow %v", c.Period, perPeriod[c.Period], want)
+		}
+	}
+	for _, l := range []string{"VFIAX", "VUSXX", "VTSAX"} {
+		if !labels[l] {
+			t.Errorf("missing income label %s (have %v)", l, labels)
+		}
+	}
+	if _, err := s.IncomeBySecurity(ctx, "week", 0); err == nil {
+		t.Fatal("expected interval error")
+	}
+}

@@ -168,6 +168,14 @@ type ValuePoint struct {
 	Value            float64 `json:"value"`
 	NetContributions float64 `json:"net_contributions"`
 	Income           float64 `json:"income"`
+	// ByAccount is Value split by account ID (JSON object keys are IDs).
+	ByAccount map[int64]float64 `json:"by_account"`
+}
+
+// AccountRef names an account that appears in a ValueHistory.
+type AccountRef struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
 }
 
 // SnapshotPoint is a total value actually reported by a source on a date.
@@ -181,6 +189,9 @@ type ValueHistory struct {
 	Interval  string          `json:"interval"`
 	Points    []ValuePoint    `json:"points"`
 	Snapshots []SnapshotPoint `json:"snapshots"`
+	// Accounts lists every account with a non-zero value at some point,
+	// ordered by ID (a stable order, so colors can follow the account).
+	Accounts []AccountRef `json:"accounts"`
 	// UnpricedSecurities lists securities held at some point with no known
 	// price; they are valued at 0 and make the history an underestimate.
 	UnpricedSecurities []string `json:"unpriced_securities"`
@@ -412,14 +423,14 @@ func (s *Store) ValueHistory(ctx context.Context, interval string, accountID int
 	// Unvested tranches (optional): each counts from its grant date until
 	// its vest date, net of cancelled shares, valued like any position.
 	type tranche struct {
-		sec         int64
+		acct, sec   int64
 		from, until string
 		qty         float64
 	}
 	var tranches []tranche
 	if opts.IncludeUnvested {
 		trows, err := s.db.QueryContext(ctx, `
-			SELECT g.security_id, COALESCE(g.grant_date, ''), v.vest_date, v.granted_qty - v.cancelled_qty
+			SELECT g.account_id, g.security_id, COALESCE(g.grant_date, ''), v.vest_date, v.granted_qty - v.cancelled_qty
 			FROM equity_vests v
 			JOIN equity_grants g ON g.id = v.grant_id
 			JOIN accounts a ON a.id = g.account_id
@@ -429,7 +440,7 @@ func (s *Store) ValueHistory(ctx context.Context, interval string, accountID int
 		}
 		for trows.Next() {
 			var t tranche
-			if err := trows.Scan(&t.sec, &t.from, &t.until, &t.qty); err != nil {
+			if err := trows.Scan(&t.acct, &t.sec, &t.from, &t.until, &t.qty); err != nil {
 				trows.Close()
 				return nil, err
 			}
@@ -442,6 +453,7 @@ func (s *Store) ValueHistory(ctx context.Context, interval string, accountID int
 	}
 
 	unpriced := map[int64]bool{}
+	seenAccts := map[int64]bool{}
 	fi := 0
 	var contrib, incomeSum int64
 	for _, d := range dates {
@@ -450,7 +462,7 @@ func (s *Store) ValueHistory(ctx context.Context, interval string, accountID int
 			incomeSum += flows[fi].incom
 			fi++
 		}
-		var value float64
+		byAcct := map[int64]float64{}
 		for _, st := range states {
 			for st.idx < len(st.deltas) && st.deltas[st.idx].date <= d {
 				st.cum += st.deltas[st.idx].qty
@@ -469,23 +481,35 @@ func (s *Store) ValueHistory(ctx context.Context, interval string, accountID int
 					continue
 				}
 			}
-			value += qty * p
+			byAcct[st.key.acct] += qty * p
 		}
-		for _, series := range balanceSeries {
-			value += balanceAt(series, d)
+		for acct, series := range balanceSeries {
+			byAcct[acct] += balanceAt(series, d)
 		}
 		for _, t := range tranches {
 			if t.from <= d && d < t.until {
 				if p, ok := priceAt(prices[t.sec], d); ok {
-					value += t.qty * p
+					byAcct[t.acct] += t.qty * p
 				} else {
 					unpriced[t.sec] = true
 				}
 			}
 		}
+		var value float64
+		for acct, v := range byAcct {
+			v = math.Round(v*100) / 100
+			if v == 0 {
+				delete(byAcct, acct)
+				continue
+			}
+			byAcct[acct] = v
+			value += v
+			seenAccts[acct] = true
+		}
 		out.Points = append(out.Points, ValuePoint{
 			Date:             d,
 			Value:            math.Round(value*100) / 100,
+			ByAccount:        byAcct,
 			NetContributions: ingest.Cents(contrib).Dollars(),
 			Income:           ingest.Cents(incomeSum).Dollars(),
 		})
@@ -494,6 +518,27 @@ func (s *Store) ValueHistory(ctx context.Context, interval string, accountID int
 		out.UnpricedSecurities = append(out.UnpricedSecurities, secInfo[id].label)
 	}
 	sort.Strings(out.UnpricedSecurities)
+
+	out.Accounts = []AccountRef{}
+	if len(seenAccts) > 0 {
+		rows, err := s.db.QueryContext(ctx, `SELECT id, name FROM accounts ORDER BY id`)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var a AccountRef
+			if err := rows.Scan(&a.ID, &a.Name); err != nil {
+				return nil, err
+			}
+			if seenAccts[a.ID] {
+				out.Accounts = append(out.Accounts, a)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
 	return out, nil
 }
 
@@ -688,6 +733,57 @@ func (s *Store) CashFlow(ctx context.Context, interval string, accountID int64) 
 		r.Contributions, r.Withdrawals = ingest.Cents(c).Dollars(), ingest.Cents(w).Dollars()
 		r.Dividends, r.Interest, r.CapitalGains = ingest.Cents(d).Dollars(), ingest.Cents(i).Dollars(), ingest.Cents(g).Dollars()
 		r.Fees, r.Taxes = ingest.Cents(f).Dollars(), ingest.Cents(t).Dollars()
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// IncomeRow is investment income from one security (or uninvested cash)
+// in one period.
+type IncomeRow struct {
+	Period     string  `json:"period"`
+	SecurityID *int64  `json:"security_id"` // nil: income not tied to a security (e.g. cash interest)
+	Label      string  `json:"label"`       // symbol, else security name, else "Cash"
+	Name       string  `json:"name"`        // full security name
+	Amount     float64 `json:"amount"`
+}
+
+// IncomeBySecurity breaks investment income (dividends, interest, capital
+// gain distributions) down by security and month or year.
+func (s *Store) IncomeBySecurity(ctx context.Context, interval string, accountID int64) ([]IncomeRow, error) {
+	var period string
+	switch interval {
+	case "", "month":
+		period = "substr(t.trade_date, 1, 7)"
+	case "year":
+		period = "substr(t.trade_date, 1, 4)"
+	default:
+		return nil, fmt.Errorf("%w: interval must be month or year", ErrInvalid)
+	}
+	where, args := "", []any{}
+	if accountID != 0 {
+		where, args = " AND t.account_id = ?", []any{accountID}
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT `+period+` AS p, t.security_id, COALESCE(s.symbol, s.name, 'Cash'), COALESCE(s.name, 'Cash'),
+			SUM(t.amount_cents)
+		FROM transactions t LEFT JOIN securities s ON s.id = t.security_id
+		WHERE t.type IN (`+typeList(ingest.IncomeTypes)+`)`+where+`
+		GROUP BY p, t.security_id
+		HAVING SUM(t.amount_cents) != 0
+		ORDER BY p, t.security_id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []IncomeRow{}
+	for rows.Next() {
+		var r IncomeRow
+		var cents int64
+		if err := rows.Scan(&r.Period, &r.SecurityID, &r.Label, &r.Name, &cents); err != nil {
+			return nil, err
+		}
+		r.Amount = ingest.Cents(cents).Dollars()
 		out = append(out, r)
 	}
 	return out, rows.Err()

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, type CashFlowRow, type Summary, type ValueHistory } from "../api";
-import { IncomeChart, ValueChart } from "../charts";
+import { api, type IncomeRow, type Summary, type ValueHistory } from "../api";
+import { IncomeChart, ValueChart, pivotIncome } from "../charts";
 import { humanize, money, moneyWhole, percent, shortDate } from "../format";
 
 const INTERVALS = ["week", "month"] as const;
@@ -8,14 +8,16 @@ const INTERVALS = ["week", "month"] as const;
 export function Dashboard({ goImport, includeUnvested }: { goImport: () => void; includeUnvested: boolean }) {
   const [summary, setSummary] = useState<Summary>();
   const [history, setHistory] = useState<ValueHistory>();
-  const [cash, setCash] = useState<CashFlowRow[]>([]);
+  const [income, setIncome] = useState<IncomeRow[]>([]);
+  const [byAccount, setByAccount] = useState(true);
+  const [incomeTable, setIncomeTable] = useState(false);
   const [interval, setInterval] = useState<(typeof INTERVALS)[number]>("month");
   const [showTable, setShowTable] = useState(false);
   const [error, setError] = useState<string>();
 
   useEffect(() => {
     api.summary(includeUnvested).then(setSummary).catch((e) => setError(e.message));
-    api.cashFlow("month").then(setCash).catch((e) => setError(e.message));
+    api.income("month").then(setIncome).catch((e) => setError(e.message));
   }, []);
   useEffect(() => {
     api.valueHistory(interval, undefined, includeUnvested).then(setHistory).catch((e) => setError(e.message));
@@ -84,6 +86,12 @@ export function Dashboard({ goImport, includeUnvested }: { goImport: () => void;
             <div className="sub">Reconstructed from transactions, anchored to your latest positions snapshot. Accounts without transactions (e.g. 401(k) fund summaries) use their reported balances, starting from their first balance date.</div>
           </div>
           <div className="controls" style={{ margin: 0 }}>
+            {history && history.accounts.length > 1 && (
+              <label className="toggle">
+                <input type="checkbox" checked={byAccount} onChange={(e) => setByAccount(e.target.checked)} />
+                By account
+              </label>
+            )}
             <div className="seg" role="group" aria-label="Interval">
               {INTERVALS.map((i) => (
                 <button key={i} aria-pressed={interval === i} onClick={() => setInterval(i)}>{humanize(i)}</button>
@@ -92,14 +100,24 @@ export function Dashboard({ goImport, includeUnvested }: { goImport: () => void;
             <button className="btn" onClick={() => setShowTable((s) => !s)}>{showTable ? "Chart" : "Table"}</button>
           </div>
         </div>
-        {history && !showTable && <ValueChart points={history.points} />}
+        {history && !showTable && <ValueChart points={history.points} accounts={history.accounts} byAccount={byAccount} />}
         {history && showTable && (
           <div className="table-wrap" style={{ maxHeight: 320 }}>
             <table>
-              <thead><tr><th>Date</th><th className="num">Value</th><th className="num">Net contributions</th><th className="num">Cumulative income</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>Date</th><th className="num">Total</th>
+                  {history.accounts.map((a) => <th key={a.id} className="num">{a.name}</th>)}
+                  <th className="num">Net contributions</th><th className="num">Cumulative income</th>
+                </tr>
+              </thead>
               <tbody>
                 {[...history.points].reverse().map((p) => (
-                  <tr key={p.date}><td>{shortDate(p.date)}</td><td className="num">{money(p.value)}</td><td className="num">{money(p.net_contributions)}</td><td className="num">{money(p.income)}</td></tr>
+                  <tr key={p.date}>
+                    <td>{shortDate(p.date)}</td><td className="num">{money(p.value)}</td>
+                    {history.accounts.map((a) => <td key={a.id} className="num">{money(p.by_account?.[a.id] ?? 0)}</td>)}
+                    <td className="num">{money(p.net_contributions)}</td><td className="num">{money(p.income)}</td>
+                  </tr>
                 ))}
               </tbody>
             </table>
@@ -112,8 +130,14 @@ export function Dashboard({ goImport, includeUnvested }: { goImport: () => void;
 
       <div className="grid-2">
         <div className="card">
-          <div className="card-head"><h2>Monthly investment income</h2><span className="sub">dividends, interest, capital gains</span></div>
-          <IncomeChart rows={cash} />
+          <div className="card-head">
+            <div>
+              <h2>Monthly investment income</h2>
+              <div className="sub">dividends, interest, capital gains · by holding</div>
+            </div>
+            <button className="btn" onClick={() => setIncomeTable((t) => !t)}>{incomeTable ? "Chart" : "Table"}</button>
+          </div>
+          {incomeTable ? <IncomeTable rows={income} /> : <IncomeChart rows={income} />}
         </div>
         <div className="card">
           <div className="card-head"><h2>Allocation</h2><span className="sub">by asset class (or security type)</span></div>
@@ -137,5 +161,33 @@ export function Dashboard({ goImport, includeUnvested }: { goImport: () => void;
         </div>
       </div>
     </>
+  );
+}
+
+/** Table view of the income chart (same pivot, so the same "Other" fold). */
+function IncomeTable({ rows }: { rows: IncomeRow[] }) {
+  const { data, series } = pivotIncome(rows);
+  if (data.length === 0) return <div className="empty">No income recorded yet.</div>;
+  return (
+    <div className="table-wrap" style={{ maxHeight: 300 }}>
+      <table>
+        <thead>
+          <tr>
+            <th>Month</th>
+            {series.map((s) => <th key={s.key} className="num" title={s.title}>{s.name}</th>)}
+            <th className="num">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {[...data].reverse().map((r) => (
+            <tr key={r.period as string}>
+              <td>{r.period}</td>
+              {series.map((s) => <td key={s.key} className="num">{(r[s.key] as number) ? money(r[s.key] as number) : ""}</td>)}
+              <td className="num">{money(series.reduce((sum, s) => sum + (r[s.key] as number), 0))}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

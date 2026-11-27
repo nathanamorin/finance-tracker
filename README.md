@@ -210,7 +210,8 @@ All endpoints under `/api` require SSO.
 `GET /api/transactions?account_id&type&from&to&q&limit&offset`, `/api/holdings`, `/api/performance`, `/api/equity`,
 `/api/securities`, `/api/imports`, `POST /api/imports` (multipart: `file`, optional
 `source`, `as_of`), `GET /api/imports/:id/file`, `DELETE /api/imports/:id`,
-`GET /api/reports/value-history?interval=day|week|month`, `/api/reports/cash-flow?interval=month|year`.
+`GET /api/reports/value-history?interval=day|week|month` (each point includes `by_account`), `/api/reports/cash-flow?interval=month|year`,
+`/api/reports/income?interval=month|year` (income by security, for the stacked income chart).
 `GET /healthz` is unauthenticated.
 
 ## CI

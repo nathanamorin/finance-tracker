@@ -140,13 +140,24 @@ export interface Import {
   warnings: string[];
 }
 
-export interface ValuePoint { date: string; value: number; net_contributions: number; income: number }
+export interface ValuePoint {
+  date: string;
+  value: number;
+  net_contributions: number;
+  income: number;
+  /** value by account ID */
+  by_account: Record<string, number> | null;
+}
+export interface AccountRef { id: number; name: string }
 export interface ValueHistory {
   interval: string;
   points: ValuePoint[];
+  accounts: AccountRef[];
   snapshots: { date: string; value: number }[];
   unpriced_securities: string[];
 }
+
+export interface IncomeRow { period: string; security_id: number | null; label: string; name: string; amount: number }
 
 export interface CashFlowRow {
   period: string;
@@ -214,6 +225,8 @@ export const api = {
   deleteImport: (id: number) => request<void>(`/api/imports/${id}`, { method: "DELETE" }),
   valueHistory: (interval: string, accountId?: number, includeUnvested = false) =>
     request<ValueHistory>(`/api/reports/value-history${qs({ interval, account_id: accountId, include_unvested: includeUnvested ? 1 : undefined })}`),
+  income: (interval: string, accountId?: number) =>
+    request<IncomeRow[]>(`/api/reports/income${qs({ interval, account_id: accountId })}`),
   cashFlow: (interval: string, accountId?: number) =>
     request<CashFlowRow[]>(`/api/reports/cash-flow${qs({ interval, account_id: accountId })}`),
 };

@@ -82,6 +82,7 @@ func New(cfg Config, stores *store.Manager, registry *ingest.Registry, webFS fs.
 	g.DELETE("/imports/:id", s.deleteImport)
 	g.GET("/reports/value-history", s.valueHistory)
 	g.GET("/reports/cash-flow", s.cashFlow)
+	g.GET("/reports/income", s.incomeBySecurity)
 
 	if webFS != nil {
 		e.GET("/*", spaHandler(webFS))
@@ -365,6 +366,14 @@ func (s *Server) valueHistory(c echo.Context) error {
 
 func (s *Server) cashFlow(c echo.Context) error {
 	rows, err := st(c).CashFlow(c.Request().Context(), c.QueryParam("interval"), queryInt(c, "account_id"))
+	if err != nil {
+		return err
+	}
+	return c.JSON(http.StatusOK, rows)
+}
+
+func (s *Server) incomeBySecurity(c echo.Context) error {
+	rows, err := st(c).IncomeBySecurity(c.Request().Context(), c.QueryParam("interval"), queryInt(c, "account_id"))
 	if err != nil {
 		return err
 	}

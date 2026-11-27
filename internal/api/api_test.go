@@ -109,7 +109,7 @@ func TestUploadAndPerUserIsolation(t *testing.T) {
 		t.Fatalf("bob sees %d of alice's transactions", page.Total)
 	}
 
-	for _, p := range []string{"/api/summary", "/api/accounts", "/api/holdings", "/api/reports/value-history?interval=week", "/api/reports/cash-flow", "/api/imports", "/api/meta", "/api/performance", "/api/equity"} {
+	for _, p := range []string{"/api/summary", "/api/accounts", "/api/holdings", "/api/reports/value-history?interval=week", "/api/reports/cash-flow", "/api/reports/income", "/api/imports", "/api/meta", "/api/performance", "/api/equity"} {
 		if rec := do(e, httptest.NewRequest(http.MethodGet, p, nil), "alice"); rec.Code != http.StatusOK {
 			t.Fatalf("%s: %d %s", p, rec.Code, rec.Body)
 		}
